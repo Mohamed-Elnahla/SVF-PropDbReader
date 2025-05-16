@@ -1,5 +1,8 @@
 # SVF-PropDbReader
 
+[![.NET 8.0](https://img.shields.io/badge/.NET-8.0-blue.svg)](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
+[![NuGet Version](https://img.shields.io/badge/version-1.0.4-blue)](https://www.nuget.org/packages/SVF.PropDbReader)
+
 ## Overview
 
 **SVF-PropDbReader** is a .NET library for reading and extracting property database (PropDb) information from SVF (Simple Vector Format) files. SVF is the proprietary 3D model format used by Autodesk in the Autodesk Platform Services (APS) Viewer (formerly Forge Viewer). This library enables developers to programmatically access and analyze property data embedded in SVF models, which is essential for BIM, CAD, and digital twin applications.
