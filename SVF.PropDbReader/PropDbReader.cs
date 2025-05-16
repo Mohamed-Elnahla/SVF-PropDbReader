@@ -12,18 +12,14 @@ namespace SVF.PropDbReader
     {
         private readonly SqliteConnection _connection;
         private readonly SqliteCommand _propertyQuery;
-        private readonly string _urn;
-        private readonly string dbPath;
-        private readonly string _accessToken;
+
         /// <summary>
         /// Opens the property database at the given path.
         /// </summary>
         public PropDbReader(string accessToken, string urn)
         {
-            _accessToken = accessToken;
-            _urn = urn;
             var dpDownloader = new DbDownloader(accessToken);
-            dbPath = dpDownloader.DownloadPropertiesDatabaseAsync(urn).Result ?? throw new InvalidOperationException("Failed to download properties database.");
+            string dbPath = dpDownloader.DownloadPropertiesDatabaseAsync(urn).Result ?? throw new InvalidOperationException("Failed to download properties database.");
             _connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
             _connection.Open();
             _propertyQuery = _connection.CreateCommand();
@@ -39,6 +35,25 @@ namespace SVF.PropDbReader
             ";
             _propertyQuery.Parameters.Add("$dbId", SqliteType.Integer);
         }
+
+        public PropDbReader(string dbPath)
+        {
+            _connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+            _connection.Open();
+            _propertyQuery = _connection.CreateCommand();
+            _propertyQuery.CommandText = @"
+                SELECT _objects_attr.category AS catDisplayName,
+                       _objects_attr.display_name AS attrDisplayName,
+                       _objects_val.value AS propValue
+                FROM _objects_eav
+                  INNER JOIN _objects_id ON _objects_eav.entity_id = _objects_id.id
+                  INNER JOIN _objects_attr ON _objects_eav.attribute_id = _objects_attr.id
+                  INNER JOIN _objects_val ON _objects_eav.value_id = _objects_val.id
+                WHERE _objects_id.id = $dbId
+            ";
+            _propertyQuery.Parameters.Add("$dbId", SqliteType.Integer);
+        }
+
 
         /// <summary>
         /// Gets the properties for a given dbId, merging parent properties recursively.
