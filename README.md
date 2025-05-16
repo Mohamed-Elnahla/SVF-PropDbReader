@@ -73,27 +73,87 @@ foreach (var prop in props)
 
 - `PropDbReader(string dbPath)`
 
-  - **Description:** Initializes a new instance of `PropDbReader` for reading properties from a local SVF property database file (`.sdb`).
+  - **Description:** Initializes a new instance for reading properties from a local SVF property database file (`.sdb`).
   - **Parameters:**
     - `dbPath` (`string`): The full path to the local SVF property database file.
-  - **Usage:** Use this constructor when you have already downloaded the SVF `.sdb` property database file to your local machine.
 
 - `PropDbReader(string accessToken, string urn)`
-  - **Description:** Initializes a new instance of `PropDbReader` for reading properties directly from an SVF property database in Autodesk APS (Forge) using an access token and model URN.
+  - **Description:** Initializes a new instance for reading properties directly from an SVF property database in Autodesk APS (Forge) using an access token and model URN.
   - **Parameters:**
     - `accessToken` (`string`): A valid APS access token with permission to access the SVF model.
     - `urn` (`string`): The URN of the SVF model in Autodesk APS.
-  - **Usage:** Use this constructor to access the SVF property database from a model stored in Autodesk cloud without downloading the `.sdb` file manually.
 
 #### Methods
 
-- `Task<Dictionary<string, object>> GetPropertiesForDbIdAsync(int dbId)`
-  - **Description:** Asynchronously retrieves all properties for a given database ID (dbId) from the SVF property database.
+- `Task<Dictionary<string, object>> GetPropertiesForDbIdAsync(long dbId)`
+
+  - **Description:** Asynchronously retrieves all direct properties for a given database ID (dbId) from the SVF property database.
   - **Parameters:**
-    - `dbId` (`int`): The database ID of the SVF model element whose properties you want to retrieve.
+    - `dbId` (`long`): The database ID of the SVF model element whose properties you want to retrieve.
   - **Returns:**
-    - `Task<Dictionary<string, object>>`: A task that resolves to a dictionary containing property names and their values for the specified dbId from the SVF property database.
-  - **Usage:** Call this method after initializing the reader to get all properties for a specific element in the SVF property database.
+    - `Task<Dictionary<string, object>>`: Dictionary of property names and values for the specified dbId.
+
+- `Task<Dictionary<string, object>> GetMergedPropertiesAsync(long dbId)`
+
+  - **Description:** Gets the properties for a given dbId, merging parent properties recursively from the SVF property database.
+  - **Parameters:**
+    - `dbId` (`long`): The database ID of the SVF model element.
+  - **Returns:**
+    - `Task<Dictionary<string, object>>`: Dictionary of merged property names and values for the dbId.
+
+- `Task<Dictionary<long, object>> GetAllPropertyValuesAsync(string category, string displayName)`
+
+  - **Description:** Returns all property values for all dbIds for a specific category and display name (property name) from the SVF property database.
+  - **Parameters:**
+    - `category` (`string`): The category name of the property.
+    - `displayName` (`string`): The display name (property name).
+  - **Returns:**
+    - `Task<Dictionary<long, object>>`: Dictionary mapping dbId to the property value.
+
+- `Task<Dictionary<long, Dictionary<string, object>>> GetAllPropertiesAsync()`
+
+  - **Description:** Gets all properties for all dbIds in the SVF property database.
+  - **Returns:**
+    - `Task<Dictionary<long, Dictionary<string, object>>>`: Dictionary mapping dbId to a dictionary of property key-value pairs.
+
+- `Task<long?> GetParentDbIdAsync(long dbId)`
+
+  - **Description:** Gets the parent dbId for a given dbId, or null if none exists, from the SVF property database.
+  - **Parameters:**
+    - `dbId` (`long`): The database ID to query.
+  - **Returns:**
+    - `Task<long?>`: The parent dbId or null.
+
+- `Task<object> GetPropertyValueAsync(long dbId, string category, string displayName)`
+
+  - **Description:** Gets the value for a specific property (by category and display name) for a given dbId from the SVF property database.
+  - **Parameters:**
+    - `dbId` (`long`): The database ID to query.
+    - `category` (`string`): The property category.
+    - `displayName` (`string`): The property display name.
+  - **Returns:**
+    - `Task<object>`: The property value or null.
+
+- `Task<List<long>> FindDbIdsByPropertyAsync(string category, string displayName, object value)`
+
+  - **Description:** Finds all dbIds where the given category, property name (display name), and value match in the SVF property database.
+  - **Parameters:**
+    - `category` (`string`): The property category.
+    - `displayName` (`string`): The property display name.
+    - `value` (`object`): The value to match.
+  - **Returns:**
+    - `Task<List<long>>`: List of dbIds matching the criteria.
+
+- `Task<List<Dictionary<string, object>>> QueryAsync(string sql)`
+
+  - **Description:** Executes a custom SQL query on the SVF property database and returns the results as a list of dictionaries (column name to value).
+  - **Parameters:**
+    - `sql` (`string`): The SQL query string to execute.
+  - **Returns:**
+    - `Task<List<Dictionary<string, object>>>`: List of dictionaries, each representing a row (column name to value).
+
+- `void Dispose()`
+  - **Description:** Disposes the database connection and resources.
 
 ### `DbDownloader`
 
