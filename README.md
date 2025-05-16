@@ -69,17 +69,46 @@ foreach (var prop in props)
 
 ### `PropDbReader`
 
-- `PropDbReader(string dbPath)` – Initializes the reader with the path to the property database file (.sdb).
-- `PropDbReader(string accessToken, string urn)` – Initializes the reader with an APS access token and model URN.
-- `Task<Dictionary<string, object>> GetPropertiesForDbIdAsync(int dbId)` – Gets all properties for a given database ID asynchronously.
+#### Constructors
+
+- `PropDbReader(string dbPath)`
+
+  - **Description:** Initializes a new instance of `PropDbReader` for reading properties from a local SVF property database file (`.sdb`).
+  - **Parameters:**
+    - `dbPath` (`string`): The full path to the local SVF property database file.
+  - **Usage:** Use this constructor when you have already downloaded the SVF `.sdb` property database file to your local machine.
+
+- `PropDbReader(string accessToken, string urn)`
+  - **Description:** Initializes a new instance of `PropDbReader` for reading properties directly from an SVF property database in Autodesk APS (Forge) using an access token and model URN.
+  - **Parameters:**
+    - `accessToken` (`string`): A valid APS access token with permission to access the SVF model.
+    - `urn` (`string`): The URN of the SVF model in Autodesk APS.
+  - **Usage:** Use this constructor to access the SVF property database from a model stored in Autodesk cloud without downloading the `.sdb` file manually.
+
+#### Methods
+
+- `Task<Dictionary<string, object>> GetPropertiesForDbIdAsync(int dbId)`
+  - **Description:** Asynchronously retrieves all properties for a given database ID (dbId) from the SVF property database.
+  - **Parameters:**
+    - `dbId` (`int`): The database ID of the SVF model element whose properties you want to retrieve.
+  - **Returns:**
+    - `Task<Dictionary<string, object>>`: A task that resolves to a dictionary containing property names and their values for the specified dbId from the SVF property database.
+  - **Usage:** Call this method after initializing the reader to get all properties for a specific element in the SVF property database.
 
 ### `DbDownloader`
 
-- `static void DownloadAndExtract(string svfUrl, string outputPath)` – Downloads and extracts PropDb.
+- `static void DownloadAndExtract(string svfUrl, string outputPath)`
+  - **Description:** Downloads an SVF package from the specified URL and extracts the SVF property database (`PropDb`) to the given output path.
+  - **Parameters:**
+    - `svfUrl` (`string`): The URL to the SVF package (typically from Autodesk APS or Forge).
+    - `outputPath` (`string`): The directory where the extracted SVF property database and related files will be saved.
+  - **Usage:** Use this method to programmatically download and extract the SVF property database from an SVF model package.
+  - **Exceptions:** Throws if the download fails or the SVF package is invalid.
 
 ### `ManifestHelper`
 
-- Utilities for reading and parsing SVF manifest files.
+- **Description:** Provides utility methods for reading and parsing SVF manifest files, which describe the structure and contents of SVF packages, including the property database.
+- **Usage:** Use these utilities to inspect or process manifest files when working with SVF models and their property database resources.
 
 ## Contributing
 
@@ -87,7 +116,7 @@ Contributions are welcome! Please open issues or submit pull requests for bug fi
 
 ## License
 
-This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE.txt) file for details.
 
 ## References
 
