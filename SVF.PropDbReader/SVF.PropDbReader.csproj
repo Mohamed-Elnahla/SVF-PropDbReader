@@ -4,6 +4,16 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageId>SVF.PropDbReader</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>YourName</Authors>
+    <Company>YourCompany</Company>
+    <Description>Reads and processes SVF property databases.</Description>
+    <PackageTags>SVF;Property;Database;Reader</PackageTags>
+    <RepositoryUrl>https://github.com/Mohamed-Elnahla/SVF-PropDbReader</RepositoryUrl>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/Mohamed-Elnahla/SVF-PropDbReader</PackageProjectUrl>
   </PropertyGroup>
 
   <ItemGroup>
