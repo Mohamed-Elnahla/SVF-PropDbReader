@@ -112,6 +112,190 @@ namespace SVF.PropDbReader
         }
 
         /// <summary>
+        /// Returns all property values for all dbIds for a specific category and display name (property name).
+        /// </summary>
+        /// <param name="category">The category name of the property.</param>
+        /// <param name="displayName">The display name (property name) readable by human.</param>
+        /// <returns>A dictionary mapping dbId to the property value.</returns>
+        public async Task<Dictionary<long, object>> GetAllPropertyValuesAsync(string category, string displayName)
+        {
+            var result = new Dictionary<long, object>();
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT _objects_id.id AS dbId, _objects_val.value AS propValue
+                    FROM _objects_eav
+                      INNER JOIN _objects_id ON _objects_eav.entity_id = _objects_id.id
+                      INNER JOIN _objects_attr ON _objects_eav.attribute_id = _objects_attr.id
+                      INNER JOIN _objects_val ON _objects_eav.value_id = _objects_val.id
+                    WHERE _objects_attr.category = $category AND _objects_attr.display_name = $displayName
+                ";
+                cmd.Parameters.AddWithValue("$category", category ?? string.Empty);
+                cmd.Parameters.AddWithValue("$displayName", displayName ?? string.Empty);
+
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        long dbId = reader.GetInt64(0);
+                        object value = await reader.IsDBNullAsync(1) ? string.Empty : reader.GetValue(1);
+                        result[dbId] = value;
+                    }
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Gets all properties for all dbIds in the database.
+        /// </summary>
+        /// <returns>A dictionary mapping dbId to a dictionary of property key-value pairs.</returns>
+        public async Task<Dictionary<long, Dictionary<string, object>>> GetAllPropertiesAsync()
+        {
+            var result = new Dictionary<long, Dictionary<string, object>>();
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT _objects_id.id AS dbId, _objects_attr.category, _objects_attr.display_name, _objects_val.value
+                    FROM _objects_eav
+                      INNER JOIN _objects_id ON _objects_eav.entity_id = _objects_id.id
+                      INNER JOIN _objects_attr ON _objects_eav.attribute_id = _objects_attr.id
+                      INNER JOIN _objects_val ON _objects_eav.value_id = _objects_val.id
+                ";
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        long dbId = reader.GetInt64(0);
+                        string cat = await reader.IsDBNullAsync(1) ? string.Empty : reader.GetString(1);
+                        string attr = await reader.IsDBNullAsync(2) ? string.Empty : reader.GetString(2);
+                        object value = await reader.IsDBNullAsync(3) ? string.Empty : reader.GetValue(3);
+                        string key = $"{cat}_{attr}";
+                        if (!result.TryGetValue(dbId, out var propDict))
+                        {
+                            propDict = new Dictionary<string, object>();
+                            result[dbId] = propDict;
+                        }
+                        propDict[key] = value;
+                    }
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Gets the parent dbId for a given dbId, or null if none exists.
+        /// </summary>
+        public async Task<long?> GetParentDbIdAsync(long dbId)
+        {
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT _objects_val.value
+                    FROM _objects_eav
+                      INNER JOIN _objects_attr ON _objects_eav.attribute_id = _objects_attr.id
+                      INNER JOIN _objects_val ON _objects_eav.value_id = _objects_val.id
+                    WHERE _objects_eav.entity_id = $dbId
+                      AND _objects_attr.category = '__parent__'
+                ";
+                cmd.Parameters.AddWithValue("$dbId", dbId);
+                var result = await cmd.ExecuteScalarAsync();
+                if (result != null && long.TryParse(result.ToString(), out long parentId))
+                    return parentId;
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Gets the value for a specific property (by category and display name) for a given dbId.
+        /// </summary>
+        public async Task<object> GetPropertyValueAsync(long dbId, string category, string displayName)
+        {
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT _objects_val.value
+                    FROM _objects_eav
+                      INNER JOIN _objects_attr ON _objects_eav.attribute_id = _objects_attr.id
+                      INNER JOIN _objects_val ON _objects_eav.value_id = _objects_val.id
+                    WHERE _objects_eav.entity_id = $dbId
+                      AND _objects_attr.category = $category
+                      AND _objects_attr.display_name = $displayName
+                ";
+                cmd.Parameters.AddWithValue("$dbId", dbId);
+                cmd.Parameters.AddWithValue("$category", category ?? string.Empty);
+                cmd.Parameters.AddWithValue("$displayName", displayName ?? string.Empty);
+                var result = await cmd.ExecuteScalarAsync();
+                return result ?? null;
+            }
+        }
+
+        /// <summary>
+        /// Finds all dbIds where the given category, property name (display name), and value match.
+        /// </summary>
+        /// <param name="category">The category name of the property.</param>
+        /// <param name="displayName">The display name (property name).</param>
+        /// <param name="value">The value to match.</param>
+        /// <returns>A list of dbIds matching the criteria.</returns>
+        public async Task<List<long>> FindDbIdsByPropertyAsync(string category, string displayName, object value)
+        {
+            var dbIds = new List<long>();
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT _objects_id.id AS dbId
+                    FROM _objects_eav
+                      INNER JOIN _objects_id ON _objects_eav.entity_id = _objects_id.id
+                      INNER JOIN _objects_attr ON _objects_eav.attribute_id = _objects_attr.id
+                      INNER JOIN _objects_val ON _objects_eav.value_id = _objects_val.id
+                    WHERE _objects_attr.category = $category
+                      AND _objects_attr.display_name = $displayName
+                      AND _objects_val.value = $value
+                ";
+                cmd.Parameters.AddWithValue("$category", category ?? string.Empty);
+                cmd.Parameters.AddWithValue("$displayName", displayName ?? string.Empty);
+                cmd.Parameters.AddWithValue("$value", value ?? string.Empty);
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        dbIds.Add(reader.GetInt64(0));
+                    }
+                }
+            }
+            return dbIds;
+        }
+
+        /// <summary>
+        /// Executes a custom SQL query and returns the results as a list of dictionaries (column name to value).
+        /// </summary>
+        /// <param name="sql">The SQL query string to execute.</param>
+        /// <returns>A list of dictionaries, each representing a row (column name to value).</returns>
+        public async Task<List<Dictionary<string, object>>> QueryAsync(string sql)
+        {
+            var results = new List<Dictionary<string, object>>();
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = sql;
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        var row = new Dictionary<string, object>();
+                        for (int i = 0; i < reader.FieldCount; i++)
+                        {
+                            string colName = reader.GetName(i);
+                            object value = await reader.IsDBNullAsync(i) ? null : reader.GetValue(i);
+                            row[colName] = value;
+                        }
+                        results.Add(row);
+                    }
+                }
+            }
+            return results;
+        }
+
+        /// <summary>
         /// Disposes the database connection.
         /// </summary>
         public void Dispose()
