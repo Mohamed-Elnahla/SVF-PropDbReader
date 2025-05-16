@@ -87,9 +87,11 @@ Contributions are welcome! Please open issues or submit pull requests for bug fi
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
 
 ## References
 
 - [Autodesk Platform Services (APS) Viewer](https://aps.autodesk.com/en/docs/viewer/)
-- [SVF File Format](https://aps.autodesk.com/en/docs/model-derivative/v2/developers_guide/supported/)
+- [svf-utils](https://github.com/petrbroz/svf-utils)
+- [aps-sdk-node](https://github.com/petrbroz/aps-sdk-node/tree/develop)
+- [aps-sdk-net](https://github.com/autodesk-platform-services/aps-sdk-net)
