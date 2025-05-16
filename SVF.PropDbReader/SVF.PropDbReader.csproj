@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>SVF.PropDbReader</PackageId>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <Authors>YourName</Authors>
     <Company>YourCompany</Company>
     <Description>Reads and processes SVF property databases.</Description>

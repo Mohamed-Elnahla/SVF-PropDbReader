@@ -78,9 +78,9 @@ namespace SVF.PropDbReader
             {
                 while (await reader.ReadAsync())
                 {
-                    string cat = reader.GetString(0);
-                    string attr = reader.GetString(1);
-                    object value = reader.GetValue(2);
+                    string cat = await reader.IsDBNullAsync(0) ? string.Empty : reader.GetString(0);
+                    string attr = await reader.IsDBNullAsync(1) ? string.Empty : reader.GetString(1);
+                    object value = await reader.IsDBNullAsync(2) ? string.Empty : reader.GetValue(2);
                     string key = $"{cat}_{attr}";
                     props[key] = value;
                 }
