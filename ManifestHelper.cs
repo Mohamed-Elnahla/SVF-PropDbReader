@@ -18,9 +18,9 @@ public class ManifestHelper
     /// <param name="type">Optional type to match.</param>
     /// <param name="role">Optional role to match.</param>
     /// <returns>List of matching DerivativeChild objects.</returns>
-    public List<ManifestChildren> Search(string guid = null, string type = null, string role = null)
+    public List<ManifestResources> Search(string guid = null, string type = null, string role = null)
     {
-        var matches = new List<ManifestChildren>();
+        var matches = new List<ManifestResources>();
 
         Traverse(child =>
         {
@@ -44,7 +44,7 @@ public class ManifestHelper
     /// </summary>
     /// <param name="callback">Function to be called for each derivative,
     /// returning a bool indicating whether the traversal should recurse deeper in the manifest hierarchy.</param>
-    public void Traverse(Func<ManifestChildren, bool> callback)
+    public void Traverse(Func<ManifestResources, bool> callback)
     {
         if (_manifest?.Derivatives == null)
             return;
@@ -61,7 +61,7 @@ public class ManifestHelper
         }
     }
 
-    private void Process(ManifestChildren node, Func<ManifestChildren, bool> callback)
+    private void Process(ManifestResources node, Func<ManifestResources, bool> callback)
     {
         bool proceed = callback(node);
         if (proceed && node.Children != null)
