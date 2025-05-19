@@ -14,7 +14,7 @@ namespace SVF.PropDbReader
         private readonly SqliteCommand _propertyQuery;
 
         /// <summary>
-        /// Opens the property database at the given path.
+        /// Opens the property database after downloading it using the URN and the accessToken.
         /// </summary>
         public PropDbReader(string accessToken, string urn)
         {
@@ -36,6 +36,9 @@ namespace SVF.PropDbReader
             _propertyQuery.Parameters.Add("$dbId", SqliteType.Integer);
         }
 
+        /// <summary>
+        /// Opens the property database at the given path.
+        /// </summary>
         public PropDbReader(string dbPath)
         {
             _connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
@@ -93,7 +96,7 @@ namespace SVF.PropDbReader
         /// </summary>
         private async Task<Dictionary<string, object>> MergeParentPropertiesAsync(Dictionary<string, object> childProps, Dictionary<long, Dictionary<string, object>> cache)
         {
-            const string parentKey = "__parent___null";
+            const string parentKey = "__parent___";
             if (childProps.TryGetValue(parentKey, out var parentDbIdObj) && parentDbIdObj is long parentDbId)
             {
                 if (!cache.TryGetValue(parentDbId, out var parentProps))
