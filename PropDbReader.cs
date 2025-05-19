@@ -12,6 +12,7 @@ namespace SVF.PropDbReader
     {
         private readonly SqliteConnection _connection;
         private readonly SqliteCommand _propertyQuery;
+        private readonly string _dbPath;
 
         /// <summary>
         /// Opens the property database after downloading it using the URN and the accessToken.
@@ -19,8 +20,8 @@ namespace SVF.PropDbReader
         public PropDbReader(string accessToken, string urn)
         {
             var dpDownloader = new DbDownloader(accessToken);
-            string dbPath = dpDownloader.DownloadPropertiesDatabaseAsync(urn).Result ?? throw new InvalidOperationException("Failed to download properties database.");
-            _connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+            _dbPath = dpDownloader.DownloadPropertiesDatabaseAsync(urn).Result ?? throw new InvalidOperationException("Failed to download properties database.");
+            _connection = new SqliteConnection($"Data Source={_dbPath};Mode=ReadOnly;Pooling=False");
             _connection.Open();
             _propertyQuery = _connection.CreateCommand();
             _propertyQuery.CommandText = @"
@@ -41,7 +42,8 @@ namespace SVF.PropDbReader
         /// </summary>
         public PropDbReader(string dbPath)
         {
-            _connection = new SqliteConnection($"Data Source={dbPath};Mode=ReadOnly");
+            _dbPath = dbPath;
+            _connection = new SqliteConnection($"Data Source={_dbPath};Mode=ReadOnly");
             _connection.Open();
             _propertyQuery = _connection.CreateCommand();
             _propertyQuery.CommandText = @"
@@ -297,6 +299,26 @@ namespace SVF.PropDbReader
             }
             return results;
         }
+        /// <summary>
+        /// Delete the DB File
+        /// </summary>
+        /// <returns></returns>
+        public bool DeleteDbFile()
+        {
+            try
+            {
+                if (File.Exists(_dbPath))
+                {
+                    File.Delete(_dbPath);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error deleting file: {ex.Message}");
+            }
+            return false;
+        }
 
         /// <summary>
         /// Disposes the database connection.
@@ -304,7 +326,10 @@ namespace SVF.PropDbReader
         public void Dispose()
         {
             _propertyQuery?.Dispose();
+            // Remove the downloaded database file if needed, without blocking the main thread
+            _connection.Close();
             _connection?.Dispose();
+            DeleteDbFile();
         }
     }
 }
