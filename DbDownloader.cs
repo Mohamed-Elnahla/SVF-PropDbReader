@@ -30,12 +30,11 @@ namespace SVF.PropDbReader
         /// <param name="clientId">Autodesk client ID.</param>
         /// <param name="clientSecret">Autodesk client secret.</param>
         /// <param name="region">APS region (e.g., "US").</param>
-        /// <param name="cacheDir">Directory for caching property databases.</param>
-        public DbDownloader(string accessToken, string region = "US", string? cacheDir = null)
+        public DbDownloader(string accessToken, string region = "US")
         {
             _accessToken = accessToken;
             _region = region;
-            _cacheDir = cacheDir ?? Path.Combine(AppContext.BaseDirectory, "dbcache");
+            _cacheDir = Path.Combine(Path.GetTempPath(), "dbcache");
             Directory.CreateDirectory(_cacheDir);
             // Instantiate SDK manager as below.  
             SDKManager sdkManager = SdkManagerBuilder
@@ -81,10 +80,10 @@ namespace SVF.PropDbReader
                 }
             }
 
-            // Create a request-specific temp copy
-            string tempFile = Path.Combine(Path.GetTempPath(), $"{safeUrn}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid().ToString("N")}_properties.sdb");
-            File.Copy(cacheFile, tempFile, true);
-            return tempFile;
+            //// Create a request-specific temp copy
+            //string tempFile = Path.Combine(Path.GetTempPath(), $"{safeUrn}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid().ToString("N")}_properties.sdb");
+            //File.Copy(cacheFile, tempFile, true);
+            return cacheFile;
         }
 
         private static string SanitizeFilename(string urn)
@@ -107,7 +106,7 @@ namespace SVF.PropDbReader
 
         private async Task<string?> FindPropertyDatabaseDerivativeUrnAsync(string urn, string accessToken)
         {
-            var manifest = await modelDerivativeClient.GetManifestAsync(urn: urn, accessToken:accessToken);
+            var manifest = await modelDerivativeClient.GetManifestAsync(urn: urn, accessToken: accessToken);
             var mainfestHelper = new ManifestHelper(manifest);
             var pdb = mainfestHelper.Search(
                 type: "resource",
@@ -128,11 +127,13 @@ namespace SVF.PropDbReader
             var req = new HttpRequestMessage(HttpMethod.Get, cookiesUrl);
             req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
 
-            var resp = await http.SendAsync(req);
+            using var resp = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
             resp.EnsureSuccessStatusCode();
 
-            var json = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
-            var fileUrl = json.RootElement.GetProperty("url").GetString();
+            // Read only the JSON metadata as a string (small)
+            using var jsonStream = await resp.Content.ReadAsStreamAsync();
+            using var doc = await JsonDocument.ParseAsync(jsonStream);
+            var fileUrl = doc.RootElement.GetProperty("url").GetString();
 
             var cookies = string.Join("; ",
                 resp.Headers.TryGetValues("Set-Cookie", out var setCookies)
@@ -146,8 +147,12 @@ namespace SVF.PropDbReader
             using var fileResp = await http.SendAsync(fileReq, HttpCompletionOption.ResponseHeadersRead);
             fileResp.EnsureSuccessStatusCode();
 
-            using var fs = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None);
-            await fileResp.Content.CopyToAsync(fs);
+            // Stream the file directly to disk, no RAM buffering
+            using (var fs = new FileStream(outputPath, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize: 81920, useAsync: true))
+            using (var stream = await fileResp.Content.ReadAsStreamAsync())
+            {
+                await stream.CopyToAsync(fs);
+            }
         }
     }
 }

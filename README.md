@@ -1,7 +1,7 @@
 # SVF-PropDbReader
 
 [![.NET 8.0](https://img.shields.io/badge/.NET-8.0-blue.svg)](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
-[![NuGet Version](https://img.shields.io/badge/version-1.0.6-blue)](https://www.nuget.org/packages/SVF.PropDbReader)
+[![NuGet Version](https://img.shields.io/badge/version-1.0.8-blue)](https://www.nuget.org/packages/SVF.PropDbReader)
 
 ## Overview
 
