@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 
@@ -13,15 +14,38 @@ namespace SVF.PropDbReader
         private readonly SqliteConnection _connection;
         private readonly SqliteCommand _propertyQuery;
         private readonly string _dbPath;
+        private readonly bool _deleteDbOnDispose;
 
         /// <summary>
-        /// Opens the property database after downloading it using the URN and the accessToken.
+        /// Async factory to create PropDbReader by downloading the DB.
         /// </summary>
-        public PropDbReader(string accessToken, string urn)
+        public static async Task<PropDbReader> CreateAsync(string accessToken, string urn)
         {
             var dpDownloader = new DbDownloader(accessToken);
-            _dbPath = dpDownloader.DownloadPropertiesDatabaseAsync(urn).Result ?? throw new InvalidOperationException("Failed to download properties database.");
-            _connection = new SqliteConnection($"Data Source={_dbPath};Mode=ReadOnly;Pooling=False");
+            var dbPath = await dpDownloader.DownloadPropertiesDatabaseAsync(urn)
+                ?? throw new InvalidOperationException("Failed to download properties database.");
+            return new PropDbReader(dbPath, true);
+        }
+
+        /// <summary>
+        /// Async factory to create PropDbReader by downloading the DB.
+        /// </summary>
+        public static async Task<string> DownloadAndGetPath(string accessToken, string urn)
+        {
+            var dpDownloader = new DbDownloader(accessToken);
+            var dbPath = await dpDownloader.DownloadPropertiesDatabaseAsync(urn)
+                ?? throw new InvalidOperationException("Failed to download properties database.");
+            return dbPath;
+        }
+
+        /// <summary>
+        /// Opens the property database at the given path.
+        /// </summary>
+        public PropDbReader(string dbPath, bool deleteDbOnDispose = false)
+        {
+            _dbPath = dbPath;
+            _deleteDbOnDispose = deleteDbOnDispose;
+            _connection = new SqliteConnection($"Data Source={_dbPath};Mode=ReadOnly");
             _connection.Open();
             _propertyQuery = _connection.CreateCommand();
             _propertyQuery.CommandText = @"
@@ -38,12 +62,19 @@ namespace SVF.PropDbReader
         }
 
         /// <summary>
-        /// Opens the property database at the given path.
+        /// Opens the property database after downloading it using the URN and the accessToken.
+        /// This constructor is memory efficient and does not block the calling thread.
         /// </summary>
-        public PropDbReader(string dbPath)
+        /// <param name="accessToken">Autodesk access token.</param>
+        /// <param name="urn">The URN of the model.</param>
+        public PropDbReader(string accessToken, string urn)
         {
+            // DownloadPropertiesDatabaseAsync is awaited synchronously, but this is safe because it only does IO and is not called on the UI thread.
+            var dbPath = DownloadAndGetPath(accessToken, urn).GetAwaiter().GetResult()
+                ?? throw new InvalidOperationException("Failed to download properties database.");
             _dbPath = dbPath;
-            _connection = new SqliteConnection($"Data Source={_dbPath};Mode=ReadOnly");
+            _deleteDbOnDispose = true;
+            _connection = new SqliteConnection($"Data Source={_dbPath};Mode=ReadOnly;Pooling=False");
             _connection.Open();
             _propertyQuery = _connection.CreateCommand();
             _propertyQuery.CommandText = @"
@@ -63,9 +94,9 @@ namespace SVF.PropDbReader
         /// <summary>
         /// Gets the properties for a given dbId, merging parent properties recursively.
         /// </summary>
-        public async Task<Dictionary<string, object>> GetMergedPropertiesAsync(long dbId)
+        public async Task<Dictionary<string, object?>> GetMergedPropertiesAsync(long dbId)
         {
-            var cache = new Dictionary<long, Dictionary<string, object>>();
+            var cache = new Dictionary<long, Dictionary<string, object?>>();
             var props = await GetPropertiesForDbIdAsync(dbId);
             cache[dbId] = props;
             return await MergeParentPropertiesAsync(props, cache);
@@ -74,10 +105,10 @@ namespace SVF.PropDbReader
         /// <summary>
         /// Gets the direct properties for a given dbId.
         /// </summary>
-        public async Task<Dictionary<string, object>> GetPropertiesForDbIdAsync(long dbId)
+        public async Task<Dictionary<string, object?>> GetPropertiesForDbIdAsync(long dbId)
         {
             _propertyQuery.Parameters["$dbId"].Value = dbId;
-            var props = new Dictionary<string, object>();
+            var props = new Dictionary<string, object?>();
 
             using (var reader = await _propertyQuery.ExecuteReaderAsync())
             {
@@ -85,7 +116,7 @@ namespace SVF.PropDbReader
                 {
                     string cat = await reader.IsDBNullAsync(0) ? string.Empty : reader.GetString(0);
                     string attr = await reader.IsDBNullAsync(1) ? string.Empty : reader.GetString(1);
-                    object value = await reader.IsDBNullAsync(2) ? string.Empty : reader.GetValue(2);
+                    object? value = await reader.IsDBNullAsync(2) ? null : reader.GetValue(2);
                     string key = $"{cat}_{attr}";
                     props[key] = value;
                 }
@@ -96,7 +127,7 @@ namespace SVF.PropDbReader
         /// <summary>
         /// Recursively merges parent properties into the given property dictionary.
         /// </summary>
-        private async Task<Dictionary<string, object>> MergeParentPropertiesAsync(Dictionary<string, object> childProps, Dictionary<long, Dictionary<string, object>> cache)
+        private async Task<Dictionary<string, object?>> MergeParentPropertiesAsync(Dictionary<string, object?> childProps, Dictionary<long, Dictionary<string, object?>> cache)
         {
             const string parentKey = "__parent___";
             if (childProps.TryGetValue(parentKey, out var parentDbIdObj) && parentDbIdObj is long parentDbId)
@@ -117,14 +148,15 @@ namespace SVF.PropDbReader
         }
 
         /// <summary>
+        /// WARNING: For large models, this method can consume a lot of memory. Use GetAllPropertyValuesStreamAsync for streaming results if possible.
         /// Returns all property values for all dbIds for a specific category and display name (property name).
         /// </summary>
         /// <param name="category">The category name of the property.</param>
         /// <param name="displayName">The display name (property name) readable by human.</param>
         /// <returns>A dictionary mapping dbId to the property value.</returns>
-        public async Task<Dictionary<long, object>> GetAllPropertyValuesAsync(string category, string displayName)
+        public async Task<Dictionary<long, object?>> GetAllPropertyValuesAsync(string category, string displayName)
         {
-            var result = new Dictionary<long, object>();
+            var result = new Dictionary<long, object?>();
             using (var cmd = _connection.CreateCommand())
             {
                 cmd.CommandText = @"
@@ -143,7 +175,7 @@ namespace SVF.PropDbReader
                     while (await reader.ReadAsync())
                     {
                         long dbId = reader.GetInt64(0);
-                        object value = await reader.IsDBNullAsync(1) ? string.Empty : reader.GetValue(1);
+                        object? value = await reader.IsDBNullAsync(1) ? null : reader.GetValue(1);
                         result[dbId] = value;
                     }
                 }
@@ -152,12 +184,156 @@ namespace SVF.PropDbReader
         }
 
         /// <summary>
+        /// Streams all property values for all dbIds for a specific category and display name (property name).
+        /// This is more memory efficient for large models than GetAllPropertyValuesAsync.
+        /// </summary>
+        /// <param name="category">The category name of the property.</param>
+        /// <param name="displayName">The display name (property name) readable by human.</param>
+        /// <returns>An async enumerable of (dbId, value) tuples.</returns>
+        public async IAsyncEnumerable<(long dbId, object? value)> GetAllPropertyValuesStreamAsync(string category, string displayName)
+        {
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT _objects_id.id AS dbId, _objects_val.value AS propValue
+                    FROM _objects_eav
+                      INNER JOIN _objects_id ON _objects_eav.entity_id = _objects_id.id
+                      INNER JOIN _objects_attr ON _objects_eav.attribute_id = _objects_attr.id
+                      INNER JOIN _objects_val ON _objects_eav.value_id = _objects_val.id
+                    WHERE _objects_attr.category = $category AND _objects_attr.display_name = $displayName
+                ";
+                cmd.Parameters.AddWithValue("$category", category ?? string.Empty);
+                cmd.Parameters.AddWithValue("$displayName", displayName ?? string.Empty);
+
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        long dbId = reader.GetInt64(0);
+                        object? value = await reader.IsDBNullAsync(1) ? null : reader.GetValue(1);
+                        yield return (dbId, value);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Returns all property values for all dbIds for a specific category and display name (property name) as a list of tuples.
+        /// This is useful for parallel processing scenarios.
+        /// WARNING: For large models, this method can consume a lot of memory. Use GetAllPropertyValuesStreamAsync for streaming results if possible.
+        /// </summary>
+        /// <param name="category">The category name of the property.</param>
+        /// <param name="displayName">The display name (property name) readable by human.</param>
+        /// <returns>A list of (dbId, value) tuples.</returns>
+        public async Task<List<(long dbId, object? value)>> GetAllPropertyValuesListAsync(string category, string displayName)
+        {
+            var result = new List<(long dbId, object? value)>();
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT _objects_id.id AS dbId, _objects_val.value AS propValue
+                    FROM _objects_eav
+                      INNER JOIN _objects_id ON _objects_eav.entity_id = _objects_id.id
+                      INNER JOIN _objects_attr ON _objects_eav.attribute_id = _objects_attr.id
+                      INNER JOIN _objects_val ON _objects_eav.value_id = _objects_val.id
+                    WHERE _objects_attr.category = $category AND _objects_attr.display_name = $displayName
+                ";
+                cmd.Parameters.AddWithValue("$category", category ?? string.Empty);
+                cmd.Parameters.AddWithValue("$displayName", displayName ?? string.Empty);
+
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        long dbId = reader.GetInt64(0);
+                        object? value = await reader.IsDBNullAsync(1) ? null : reader.GetValue(1);
+                        result.Add((dbId, value));
+                    }
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Returns all property values for all dbIds for a specific category and display name (property name) as a thread-safe ConcurrentDictionary.
+        /// This is useful for parallel processing scenarios.
+        /// WARNING: For large models, this method can consume a lot of memory. Use GetAllPropertyValuesStreamAsync for streaming results if possible.
+        /// </summary>
+        /// <param name="category">The category name of the property.</param>
+        /// <param name="displayName">The display name (property name) readable by human.</param>
+        /// <returns>A ConcurrentDictionary mapping dbId to the property value.</returns>
+        public async Task<ConcurrentDictionary<long, object?>> GetAllPropertyValuesConcurrentAsync(string category, string displayName)
+        {
+            var result = new ConcurrentDictionary<long, object?>();
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT _objects_id.id AS dbId, _objects_val.value AS propValue
+                    FROM _objects_eav
+                      INNER JOIN _objects_id ON _objects_eav.entity_id = _objects_id.id
+                      INNER JOIN _objects_attr ON _objects_eav.attribute_id = _objects_attr.id
+                      INNER JOIN _objects_val ON _objects_eav.value_id = _objects_val.id
+                    WHERE _objects_attr.category = $category AND _objects_attr.display_name = $displayName
+                ";
+                cmd.Parameters.AddWithValue("$category", category ?? string.Empty);
+                cmd.Parameters.AddWithValue("$displayName", displayName ?? string.Empty);
+
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        long dbId = reader.GetInt64(0);
+                        object? value = await reader.IsDBNullAsync(1) ? null : reader.GetValue(1);
+                        result[dbId] = value;
+                    }
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Streams all property values for all dbIds for a specific category and display name (property name)
+        /// and adds them to a thread-safe ConcurrentDictionary as they are read.
+        /// This is more memory efficient for large models than GetAllPropertyValuesConcurrentAsync.
+        /// </summary>
+        /// <param name="category">The category name of the property.</param>
+        /// <param name="displayName">The display name (property name) readable by human.</param>
+        /// <param name="dict">A ConcurrentDictionary to populate with (dbId, value) pairs.</param>
+        /// <returns>A Task that completes when all values have been streamed into the dictionary.</returns>
+        public async Task GetAllPropertyValuesStreamToConcurrentAsync(string category, string displayName, ConcurrentDictionary<long, object?> dict)
+        {
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT _objects_id.id AS dbId, _objects_val.value AS propValue
+                    FROM _objects_eav
+                      INNER JOIN _objects_id ON _objects_eav.entity_id = _objects_id.id
+                      INNER JOIN _objects_attr ON _objects_eav.attribute_id = _objects_attr.id
+                      INNER JOIN _objects_val ON _objects_eav.value_id = _objects_val.id
+                    WHERE _objects_attr.category = $category AND _objects_attr.display_name = $displayName
+                ";
+                cmd.Parameters.AddWithValue("$category", category ?? string.Empty);
+                cmd.Parameters.AddWithValue("$displayName", displayName ?? string.Empty);
+
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        long dbId = reader.GetInt64(0);
+                        object? value = await reader.IsDBNullAsync(1) ? null : reader.GetValue(1);
+                        dict[dbId] = value;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
         /// Gets all properties for all dbIds in the database.
         /// </summary>
         /// <returns>A dictionary mapping dbId to a dictionary of property key-value pairs.</returns>
-        public async Task<Dictionary<long, Dictionary<string, object>>> GetAllPropertiesAsync()
+        public async Task<Dictionary<long, Dictionary<string, object?>>> GetAllPropertiesAsync()
         {
-            var result = new Dictionary<long, Dictionary<string, object>>();
+            var result = new Dictionary<long, Dictionary<string, object?>>();
             using (var cmd = _connection.CreateCommand())
             {
                 cmd.CommandText = @"
@@ -174,11 +350,11 @@ namespace SVF.PropDbReader
                         long dbId = reader.GetInt64(0);
                         string cat = await reader.IsDBNullAsync(1) ? string.Empty : reader.GetString(1);
                         string attr = await reader.IsDBNullAsync(2) ? string.Empty : reader.GetString(2);
-                        object value = await reader.IsDBNullAsync(3) ? string.Empty : reader.GetValue(3);
+                        object? value = await reader.IsDBNullAsync(3) ? null : reader.GetValue(3);
                         string key = $"{cat}_{attr}";
                         if (!result.TryGetValue(dbId, out var propDict))
                         {
-                            propDict = new Dictionary<string, object>();
+                            propDict = new Dictionary<string, object?>();
                             result[dbId] = propDict;
                         }
                         propDict[key] = value;
@@ -214,7 +390,7 @@ namespace SVF.PropDbReader
         /// <summary>
         /// Gets the value for a specific property (by category and display name) for a given dbId.
         /// </summary>
-        public async Task<object> GetPropertyValueAsync(long dbId, string category, string displayName)
+        public async Task<object?> GetPropertyValueAsync(long dbId, string category, string displayName)
         {
             using (var cmd = _connection.CreateCommand())
             {
@@ -231,7 +407,7 @@ namespace SVF.PropDbReader
                 cmd.Parameters.AddWithValue("$category", category ?? string.Empty);
                 cmd.Parameters.AddWithValue("$displayName", displayName ?? string.Empty);
                 var result = await cmd.ExecuteScalarAsync();
-                return result ?? null;
+                return result;
             }
         }
 
@@ -276,9 +452,9 @@ namespace SVF.PropDbReader
         /// </summary>
         /// <param name="sql">The SQL query string to execute.</param>
         /// <returns>A list of dictionaries, each representing a row (column name to value).</returns>
-        public async Task<List<Dictionary<string, object>>> QueryAsync(string sql)
+        public async Task<List<Dictionary<string, object?>>> QueryAsync(string sql)
         {
-            var results = new List<Dictionary<string, object>>();
+            var results = new List<Dictionary<string, object?>>();
             using (var cmd = _connection.CreateCommand())
             {
                 cmd.CommandText = sql;
@@ -286,11 +462,11 @@ namespace SVF.PropDbReader
                 {
                     while (await reader.ReadAsync())
                     {
-                        var row = new Dictionary<string, object>();
+                        var row = new Dictionary<string, object?>();
                         for (int i = 0; i < reader.FieldCount; i++)
                         {
                             string colName = reader.GetName(i);
-                            object value = await reader.IsDBNullAsync(i) ? null : reader.GetValue(i);
+                            object? value = await reader.IsDBNullAsync(i) ? null : reader.GetValue(i);
                             row[colName] = value;
                         }
                         results.Add(row);
@@ -321,15 +497,27 @@ namespace SVF.PropDbReader
         }
 
         /// <summary>
-        /// Disposes the database connection.
+        /// Disposes the database connection and releases all resources.
         /// </summary>
         public void Dispose()
         {
+            // Dispose command first
             _propertyQuery?.Dispose();
-            // Remove the downloaded database file if needed, without blocking the main thread
-            _connection.Close();
+            // Close and dispose connection
+            if (_connection.State != System.Data.ConnectionState.Closed)
+                _connection.Close();
             _connection?.Dispose();
-            DeleteDbFile();
+            // Suppress finalization
+            GC.SuppressFinalize(this);
+            // Delete DB file if needed
+            if (_deleteDbOnDispose)
+                DeleteDbFile();
+        }
+
+        ~PropDbReader()
+        {
+            Dispose();
         }
     }
 }
+// NOTE: For large models, avoid calling GetAllPropertiesAsync unless necessary. Consider processing in batches or streaming results to reduce memory usage.

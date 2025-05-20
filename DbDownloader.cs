@@ -16,19 +16,19 @@ namespace SVF.PropDbReader
     /// <summary>
     /// Handles downloading and caching of the Autodesk property database derivative.
     /// </summary>
-    public class DbDownloader
+    public class DbDownloader : IDisposable
     {
         private readonly string _accessToken;
-        private readonly string _clientSecret;
         private readonly string _region;
         private readonly string _cacheDir;
         private readonly ModelDerivativeClient modelDerivativeClient = null!;
+        private readonly SDKManager? _sdkManager;
+        private bool _disposed;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="DbDownloader"/> class.
         /// </summary>
-        /// <param name="clientId">Autodesk client ID.</param>
-        /// <param name="clientSecret">Autodesk client secret.</param>
+        /// <param name="accessToken">Autodesk access token.</param>
         /// <param name="region">APS region (e.g., "US").</param>
         public DbDownloader(string accessToken, string region = "US")
         {
@@ -36,14 +36,12 @@ namespace SVF.PropDbReader
             _region = region;
             _cacheDir = Path.Combine(Path.GetTempPath(), "dbcache");
             Directory.CreateDirectory(_cacheDir);
-            // Instantiate SDK manager as below.  
-            SDKManager sdkManager = SdkManagerBuilder
+            _sdkManager = SdkManagerBuilder
                                   .Create()
                                   .Add(new ApsConfiguration())
                                   .Add(ResiliencyConfiguration.CreateDefault())
                                   .Build();
-            // Instantiate ModelDerivativeApi using the created SDK manager
-            modelDerivativeClient = new ModelDerivativeClient(sdkManager);
+            modelDerivativeClient = new ModelDerivativeClient(_sdkManager);
         }
 
         /// <summary>
@@ -55,7 +53,7 @@ namespace SVF.PropDbReader
             string safeUrn = SanitizeFilename(urn);
             string cacheFile = Path.Combine(_cacheDir, $"{safeUrn}_properties.sdb");
 
-            if (!await IsFileValidAsync(cacheFile))
+            if (!IsFileValid(cacheFile))
             {
                 var token = _accessToken;
                 var derivativeUrn = await FindPropertyDatabaseDerivativeUrnAsync(urn, token);
@@ -66,7 +64,7 @@ namespace SVF.PropDbReader
                 string tempDownloadPath = Path.Combine(_cacheDir, $"{safeUrn}_temp.sdb");
                 await DownloadDerivativeWithCookiesAsync(urn, derivativeUrn, token, tempDownloadPath);
 
-                if (await IsFileValidAsync(tempDownloadPath))
+                if (IsFileValid(tempDownloadPath))
                 {
                     if (File.Exists(cacheFile))
                         File.Delete(cacheFile);
@@ -79,10 +77,6 @@ namespace SVF.PropDbReader
                     return null;
                 }
             }
-
-            //// Create a request-specific temp copy
-            //string tempFile = Path.Combine(Path.GetTempPath(), $"{safeUrn}_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}_{Guid.NewGuid().ToString("N")}_properties.sdb");
-            //File.Copy(cacheFile, tempFile, true);
             return cacheFile;
         }
 
@@ -91,7 +85,7 @@ namespace SVF.PropDbReader
             return string.Concat(urn.Select(c => char.IsLetterOrDigit(c) ? char.ToLowerInvariant(c) : '_'));
         }
 
-        private static async Task<bool> IsFileValidAsync(string filePath)
+        private static bool IsFileValid(string filePath)
         {
             try
             {
@@ -153,6 +147,21 @@ namespace SVF.PropDbReader
             {
                 await stream.CopyToAsync(fs);
             }
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            if (modelDerivativeClient is IDisposable disposableClient)
+                disposableClient.Dispose();
+            if (_sdkManager is IDisposable disposableSdk)
+                disposableSdk.Dispose();
+            _disposed = true;
+            GC.SuppressFinalize(this);
+        }
+        ~DbDownloader()
+        {
+            Dispose();
         }
     }
 }
