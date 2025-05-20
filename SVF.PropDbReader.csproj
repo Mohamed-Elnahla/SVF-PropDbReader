@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>SVF.PropDbReader</PackageId>
-    <Version>1.0.9</Version>
+    <Version>1.0.9.1</Version>
     <Authors>Mohamed-Elnahla</Authors>
     <Company>Mohamed-Elnahla</Company>
     <Description>Reads and processes SVF property databases.</Description>
@@ -17,10 +17,13 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);1591</NoWarn>
+    <PackageIcon>Resources/NugetLogo.png</PackageIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="" />
+    <None Include="Resources/NugetLogo.png" Pack="true" PackagePath="Resources/" />
+    <None Include="Resources/Logo.png" Pack="true" PackagePath="Resources/" />
     <PackageReference Include="Autodesk.ModelDerivative" Version="2.1.0" />
     <PackageReference Include="Autodesk.Authentication" Version="2.0.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.0" />
