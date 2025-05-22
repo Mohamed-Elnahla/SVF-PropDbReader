@@ -4,8 +4,9 @@
   <img src="Resources/Logo.png" alt="SVF-PropDbReader Logo" width="90%"/>
 </p>
 
+[![NuGet Version](https://img.shields.io/nuget/v/SVF.PropDbReader.svg)](https://www.nuget.org/packages/SVF.PropDbReader)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/SVF.PropDbReader.svg)](https://www.nuget.org/packages/SVF.PropDbReader)
 [![.NET 8.0](https://img.shields.io/badge/.NET-8.0-blue.svg)](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
-[![NuGet Version](https://img.shields.io/badge/version-1.0.9.1-blue)](https://www.nuget.org/packages/SVF.PropDbReader)
 
 ## Overview
 
