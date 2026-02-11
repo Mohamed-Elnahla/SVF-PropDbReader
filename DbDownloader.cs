@@ -89,7 +89,7 @@ namespace SVF.PropDbReader
         /// <summary>
         /// Sanitizes a URN string into a safe filename by replacing non-alphanumeric characters with underscores.
         /// </summary>
-        internal static string SanitizeFilename(string urn)
+        public static string SanitizeFilename(string urn)
         {
             return string.Create(urn.Length, urn, static (span, s) =>
             {

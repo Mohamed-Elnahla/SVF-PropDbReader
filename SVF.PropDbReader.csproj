@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>SVF.PropDbReader</PackageId>
-    <Version>1.1.0.0</Version>
+    <Version>1.1.0.1</Version>
     <Authors>Mohamed-Elnahla</Authors>
     <Company>Mohamed-Elnahla</Company>
     <Description>Reads and processes SVF property databases from Autodesk Model Derivative API. Supports downloading, caching, and querying properties from .sdb SQLite databases.</Description>
@@ -23,7 +23,16 @@
     <!-- Deterministic & reproducible builds -->
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+
+    <!-- Allow test project to access internal members -->
+    <InternalsVisibleTo>SVF.PropDbReader.Tests</InternalsVisibleTo>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Exclude test and example files from the main project -->
+    <Compile Remove="tests/**" />
+    <Compile Remove="examples/**" />
+  </ItemGroup>
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="" />
