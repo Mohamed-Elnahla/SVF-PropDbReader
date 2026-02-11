@@ -6,7 +6,7 @@
 
 [![NuGet Version](https://img.shields.io/nuget/v/SVF.PropDbReader.svg)](https://www.nuget.org/packages/SVF.PropDbReader)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/SVF.PropDbReader.svg)](https://www.nuget.org/packages/SVF.PropDbReader)
-[![.NET 8.0](https://img.shields.io/badge/.NET-8.0-blue.svg)](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
+[![.NET 10.0 | 9.0 | 8.0](https://img.shields.io/badge/.NET-10.0%20%7C%209.0%20%7C%208.0-blue.svg)](https://dotnet.microsoft.com/download)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE.txt)
 [![Build & Test](https://github.com/Mohamed-Elnahla/SVF-PropDbReader/actions/workflows/build-test.yml/badge.svg)](https://github.com/Mohamed-Elnahla/SVF-PropDbReader/actions/workflows/build-test.yml)
 
@@ -14,7 +14,7 @@
 
 ## Overview
 
-**SVF-PropDbReader** is a .NET 8.0 library for reading and extracting property database (PropDb) information from SVF files. SVF is the format used by **Autodesk Platform Services (APS)** to stream 3D models in web applications.
+**SVF-PropDbReader** is a .NET library (targeting .NET 10.0, 9.0, and 8.0) for reading and extracting property database (PropDb) information from SVF files. SVF is the format used by **Autodesk Platform Services (APS)** to stream 3D models in web applications.
 
 The PropDb is a SQLite database (`.sdb` file) embedded in every translated SVF model — it contains **all metadata and properties** for every element in the model.
 
@@ -92,9 +92,9 @@ var props = await reader.GetPropertiesForDbIdAsync(1, cts.Token);
 
 | Package | Version | Purpose |
 |---|---|---|
-| [Microsoft.Data.Sqlite](https://www.nuget.org/packages/Microsoft.Data.Sqlite/) | 8.0.0 | SQLite database access |
-| [Autodesk.ModelDerivative](https://www.nuget.org/packages/Autodesk.ModelDerivative/) | 2.1.0 | APS Model Derivative API client |
-| [Autodesk.Authentication](https://www.nuget.org/packages/Autodesk.Authentication/) | 2.0.0 | APS Authentication SDK |
+| [Microsoft.Data.Sqlite](https://www.nuget.org/packages/Microsoft.Data.Sqlite/) | 10.0.3 | SQLite database access |
+| [Autodesk.ModelDerivative](https://www.nuget.org/packages/Autodesk.ModelDerivative/) | 2.2.0 | APS Model Derivative API client |
+| [Autodesk.Authentication](https://www.nuget.org/packages/Autodesk.Authentication/) | 2.0.1 | APS Authentication SDK |
 
 ---
 

@@ -38,11 +38,11 @@
     <None Include="README.md" Pack="true" PackagePath="" />
     <None Include="Resources/NugetLogo.png" Pack="true" PackagePath="Resources/" />
     <None Include="Resources/Logo.png" Pack="true" PackagePath="Resources/" />
-    <PackageReference Include="Autodesk.ModelDerivative" Version="2.1.0" />
-    <PackageReference Include="Autodesk.Authentication" Version="2.0.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.12" />
+    <PackageReference Include="Autodesk.ModelDerivative" Version="2.2.0" />
+    <PackageReference Include="Autodesk.Authentication" Version="2.0.1" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.3" />
     <!-- SourceLink for IDE-level source stepping and debugger support -->
-    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="8.0.0" PrivateAssets="All" />
+    <PackageReference Include="Microsoft.SourceLink.GitHub" Version="10.0.103" PrivateAssets="all" />
   </ItemGroup>
 
 </Project>
