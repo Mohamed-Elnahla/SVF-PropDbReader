@@ -475,6 +475,84 @@ namespace SVF.PropDbReader
             }
             return results;
         }
+
+        /// <summary>
+        /// Gets all distinct property categories in the database.
+        /// </summary>
+        /// <returns>A list of distinct category names.</returns>
+        public async Task<List<string>> GetAllCategoriesAsync()
+        {
+            var categories = new List<string>();
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = "SELECT DISTINCT category FROM _objects_attr WHERE category IS NOT NULL AND category != '' ORDER BY category";
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        categories.Add(reader.GetString(0));
+                    }
+                }
+            }
+            return categories;
+        }
+
+        /// <summary>
+        /// Gets all distinct property display names (property names) in the database.
+        /// </summary>
+        /// <returns>A list of distinct property display names.</returns>
+        public async Task<List<string>> GetAllPropertyNamesAsync()
+        {
+            var names = new List<string>();
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = "SELECT DISTINCT display_name FROM _objects_attr WHERE display_name IS NOT NULL AND display_name != '' ORDER BY display_name";
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        names.Add(reader.GetString(0));
+                    }
+                }
+            }
+            return names;
+        }
+
+        /// <summary>
+        /// Gets all categories with their associated property display names.
+        /// </summary>
+        /// <returns>A dictionary mapping each category name to a list of its property display names.</returns>
+        public async Task<Dictionary<string, List<string>>> GetCategoriesWithPropertiesAsync()
+        {
+            var result = new Dictionary<string, List<string>>();
+            using (var cmd = _connection.CreateCommand())
+            {
+                cmd.CommandText = @"
+                    SELECT DISTINCT category, display_name
+                    FROM _objects_attr
+                    WHERE category IS NOT NULL AND category != ''
+                      AND display_name IS NOT NULL AND display_name != ''
+                    ORDER BY category, display_name
+                ";
+                using (var reader = await cmd.ExecuteReaderAsync())
+                {
+                    while (await reader.ReadAsync())
+                    {
+                        string category = reader.GetString(0);
+                        string displayName = reader.GetString(1);
+
+                        if (!result.TryGetValue(category, out var list))
+                        {
+                            list = new List<string>();
+                            result[category] = list;
+                        }
+                        list.Add(displayName);
+                    }
+                }
+            }
+            return result;
+        }
+
         /// <summary>
         /// Delete the DB File
         /// </summary>
