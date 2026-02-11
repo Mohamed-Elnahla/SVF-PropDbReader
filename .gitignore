@@ -89,4 +89,4 @@ migrations/
 .idea/
 *.sln.iml
 
-.github/
+.github/prompts/app.prompt.md
