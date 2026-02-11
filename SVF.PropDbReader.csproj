@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <PackageId>SVF.PropDbReader</PackageId>
-    <Version>1.1.0.2</Version>
+    <Version>1.1.0.3</Version>
     <Authors>Mohamed-Elnahla</Authors>
     <Company>Mohamed-Elnahla</Company>
     <Description>Reads and processes SVF property databases from Autodesk Model Derivative API. Supports downloading, caching, and querying properties from .sdb SQLite databases.</Description>
@@ -32,12 +32,12 @@
     <!-- Exclude test and example files from the main project -->
     <Compile Remove="tests/**" />
     <Compile Remove="examples/**" />
+    <Compile Remove="Resources/Logo.png" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="" />
     <None Include="Resources/NugetLogo.png" Pack="true" PackagePath="Resources/" />
-    <None Include="Resources/Logo.png" Pack="true" PackagePath="Resources/" />
     <PackageReference Include="Autodesk.ModelDerivative" Version="2.2.0" />
     <PackageReference Include="Autodesk.Authentication" Version="2.0.1" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.3" />
