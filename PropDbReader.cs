@@ -100,6 +100,37 @@ namespace SVF.PropDbReader
         /// </summary>
         private const string ParentKey = "__parent___";
 
+        private const string CreateLocationTableSql = @"
+            CREATE TABLE IF NOT EXISTS _fragment_locations (
+                db_id   INTEGER PRIMARY KEY,
+                x       REAL NOT NULL,
+                y       REAL NOT NULL,
+                z       REAL NOT NULL,
+                min_x   REAL NOT NULL,
+                min_y   REAL NOT NULL,
+                min_z   REAL NOT NULL,
+                max_x   REAL NOT NULL,
+                max_y   REAL NOT NULL,
+                max_z   REAL NOT NULL
+            )
+        ";
+
+        private const string InsertLocationSql = @"
+            INSERT OR REPLACE INTO _fragment_locations
+                (db_id, x, y, z, min_x, min_y, min_z, max_x, max_y, max_z)
+            VALUES
+                ($dbId, $x, $y, $z, $minX, $minY, $minZ, $maxX, $maxY, $maxZ)
+        ";
+
+        private const string SelectAllLocationsSql =
+            "SELECT db_id, x, y, z, min_x, min_y, min_z, max_x, max_y, max_z FROM _fragment_locations";
+
+        private const string SelectLocationByIdSql =
+            "SELECT x, y, z, min_x, min_y, min_z, max_x, max_y, max_z FROM _fragment_locations WHERE db_id = $dbId";
+
+        private const string LocationTableExistsSql =
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_fragment_locations'";
+
         #endregion
 
         /// <summary>
@@ -124,7 +155,7 @@ namespace SVF.PropDbReader
         /// <summary>
         /// Async factory that creates a <see cref="PropDbReader"/> and simultaneously downloads
         /// the lightweight fragment location data. This enables combined property + location queries
-        /// without a separate fragment download step.
+        /// without a separate fragment download step. Locations are held in memory only.
         /// </summary>
         /// <param name="accessToken">Autodesk access token.</param>
         /// <param name="urn">The URN of the model.</param>
@@ -149,6 +180,65 @@ namespace SVF.PropDbReader
         }
 
         /// <summary>
+        /// Async factory that creates a <see cref="PropDbReader"/>, downloads fragment locations,
+        /// and <b>embeds them into the SQLite database file</b> as a <c>_fragment_locations</c> table.
+        /// On subsequent opens of the same cached SDB file, locations are loaded automatically from
+        /// the database — no additional network download is needed.
+        /// </summary>
+        /// <param name="accessToken">Autodesk access token.</param>
+        /// <param name="urn">The URN of the model.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>A configured <see cref="PropDbReader"/> instance with fragment locations embedded and loaded.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the properties database cannot be downloaded.</exception>
+        public static async Task<PropDbReader> CreateWithEmbeddedLocationsAsync(string accessToken, string urn, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(accessToken);
+            ArgumentNullException.ThrowIfNull(urn);
+
+            // Download SDB and fragment locations in parallel
+            var dbPathTask = DownloadAndGetPathAsync(accessToken, urn, cancellationToken);
+            var locationsTask = Derivatives.ReadFragmentLocationsRemoteAsync(urn, accessToken);
+
+            await Task.WhenAll(dbPathTask, locationsTask).ConfigureAwait(false);
+
+            var dbPath = await dbPathTask ?? throw new InvalidOperationException("Failed to download properties database.");
+            var locations = await locationsTask;
+
+            // Write locations into the SQLite file (requires read-write connection)
+            await EmbedLocationsIntoFileAsync(dbPath, locations, cancellationToken).ConfigureAwait(false);
+
+            // Now open normally — the constructor will auto-detect the embedded table
+            return new PropDbReader(dbPath, deleteDbOnDispose: true);
+        }
+
+        /// <summary>
+        /// Downloads the property database and embeds fragment locations into it, returning the local file path.
+        /// The resulting file can be opened later with the standard <see cref="PropDbReader(string, bool)"/>
+        /// constructor and locations will be automatically loaded.
+        /// </summary>
+        /// <param name="accessToken">Autodesk access token.</param>
+        /// <param name="urn">The URN of the model.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>The local path to the downloaded database file with embedded locations.</returns>
+        /// <exception cref="InvalidOperationException">Thrown when the properties database cannot be downloaded.</exception>
+        public static async Task<string> DownloadWithEmbeddedLocationsAsync(string accessToken, string urn, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(accessToken);
+            ArgumentNullException.ThrowIfNull(urn);
+
+            var dbPathTask = DownloadAndGetPathAsync(accessToken, urn, cancellationToken);
+            var locationsTask = Derivatives.ReadFragmentLocationsRemoteAsync(urn, accessToken);
+
+            await Task.WhenAll(dbPathTask, locationsTask).ConfigureAwait(false);
+
+            var dbPath = await dbPathTask;
+            var locations = await locationsTask;
+
+            await EmbedLocationsIntoFileAsync(dbPath, locations, cancellationToken).ConfigureAwait(false);
+            return dbPath;
+        }
+
+        /// <summary>
         /// Downloads the property database and returns the local file path without opening it.
         /// </summary>
         /// <param name="accessToken">Autodesk access token.</param>
@@ -169,6 +259,9 @@ namespace SVF.PropDbReader
 
         /// <summary>
         /// Opens the property database at the given path.
+        /// If the database contains an embedded <c>_fragment_locations</c> table (created by
+        /// <see cref="EmbedFragmentLocationsAsync"/> or <see cref="CreateWithEmbeddedLocationsAsync"/>),
+        /// the locations are automatically loaded into memory.
         /// </summary>
         /// <param name="dbPath">Local path to the .sdb property database file.</param>
         /// <param name="deleteDbOnDispose">If true, the database file will be deleted when this instance is disposed.</param>
@@ -181,6 +274,12 @@ namespace SVF.PropDbReader
             _deleteDbOnDispose = deleteDbOnDispose;
             _connection = new SqliteConnection($"Data Source={_dbPath};Mode=ReadOnly;Pooling=False");
             _connection.Open();
+
+            // Auto-detect and load embedded fragment locations if available
+            if (HasEmbeddedLocationTable())
+            {
+                _fragmentLocations = LoadEmbeddedLocations();
+            }
         }
 
         /// <summary>
@@ -928,11 +1027,197 @@ namespace SVF.PropDbReader
             return results;
         }
 
+        /// <summary>
+        /// Writes the currently loaded fragment locations into the SQLite database file
+        /// as a <c>_fragment_locations</c> table. After this, any future open of the same file
+        /// will automatically load the locations — no additional network download is needed.
+        /// Requires fragment locations to be loaded (via <see cref="LoadFragmentLocationsAsync"/>,
+        /// <see cref="SetFragmentLocations"/>, or a factory that downloads them).
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <exception cref="InvalidOperationException">Thrown if fragment locations are not loaded.</exception>
+        public async Task EmbedFragmentLocationsAsync(CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            ThrowIfNoLocations();
+
+            await EmbedLocationsIntoFileAsync(_dbPath, _fragmentLocations!, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Writes the provided fragment locations into the specified SQLite database file
+        /// as a <c>_fragment_locations</c> table. The file is opened in read-write mode
+        /// only for this operation and then closed. This is a static helper usable before
+        /// constructing a <see cref="PropDbReader"/>.
+        /// </summary>
+        /// <param name="dbPath">Path to the existing .sdb SQLite file.</param>
+        /// <param name="locations">The fragment locations to embed.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        public static async Task EmbedLocationsIntoFileAsync(
+            string dbPath, Dictionary<int, FragmentLocation> locations, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(dbPath);
+            ArgumentNullException.ThrowIfNull(locations);
+
+            // Open a separate read-write connection just for this operation
+            using var rwConn = new SqliteConnection($"Data Source={dbPath};Mode=ReadWrite;Pooling=False");
+            await rwConn.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+            using var transaction = rwConn.BeginTransaction();
+            try
+            {
+                // Create table
+                using (var cmd = rwConn.CreateCommand())
+                {
+                    cmd.Transaction = transaction;
+                    cmd.CommandText = CreateLocationTableSql;
+                    await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                // Bulk insert using a prepared statement
+                using (var cmd = rwConn.CreateCommand())
+                {
+                    cmd.Transaction = transaction;
+                    cmd.CommandText = InsertLocationSql;
+
+                    var pDbId = cmd.Parameters.Add("$dbId", Microsoft.Data.Sqlite.SqliteType.Integer);
+                    var pX = cmd.Parameters.Add("$x", Microsoft.Data.Sqlite.SqliteType.Real);
+                    var pY = cmd.Parameters.Add("$y", Microsoft.Data.Sqlite.SqliteType.Real);
+                    var pZ = cmd.Parameters.Add("$z", Microsoft.Data.Sqlite.SqliteType.Real);
+                    var pMinX = cmd.Parameters.Add("$minX", Microsoft.Data.Sqlite.SqliteType.Real);
+                    var pMinY = cmd.Parameters.Add("$minY", Microsoft.Data.Sqlite.SqliteType.Real);
+                    var pMinZ = cmd.Parameters.Add("$minZ", Microsoft.Data.Sqlite.SqliteType.Real);
+                    var pMaxX = cmd.Parameters.Add("$maxX", Microsoft.Data.Sqlite.SqliteType.Real);
+                    var pMaxY = cmd.Parameters.Add("$maxY", Microsoft.Data.Sqlite.SqliteType.Real);
+                    var pMaxZ = cmd.Parameters.Add("$maxZ", Microsoft.Data.Sqlite.SqliteType.Real);
+
+                    foreach (var kvp in locations)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+
+                        pDbId.Value = kvp.Key;
+                        pX.Value = kvp.Value.X;
+                        pY.Value = kvp.Value.Y;
+                        pZ.Value = kvp.Value.Z;
+                        pMinX.Value = kvp.Value.MinX;
+                        pMinY.Value = kvp.Value.MinY;
+                        pMinZ.Value = kvp.Value.MinZ;
+                        pMaxX.Value = kvp.Value.MaxX;
+                        pMaxY.Value = kvp.Value.MaxY;
+                        pMaxZ.Value = kvp.Value.MaxZ;
+
+                        await cmd.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                }
+
+                transaction.Commit();
+            }
+            catch
+            {
+                transaction.Rollback();
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Gets the location for a single dbId directly from the embedded SQLite table,
+        /// without requiring the full location set to be loaded in memory.
+        /// Useful for one-off lookups when you don't need all locations at once.
+        /// </summary>
+        /// <param name="dbId">The database ID of the element.</param>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>The <see cref="FragmentLocation"/>, or null if not found or no embedded table exists.</returns>
+        public async Task<FragmentLocation?> GetEmbeddedFragmentLocationAsync(int dbId, CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SelectLocationByIdSql;
+            cmd.Parameters.AddWithValue("$dbId", dbId);
+
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return new FragmentLocation(
+                    (float)reader.GetDouble(0), (float)reader.GetDouble(1), (float)reader.GetDouble(2),
+                    (float)reader.GetDouble(3), (float)reader.GetDouble(4), (float)reader.GetDouble(5),
+                    (float)reader.GetDouble(6), (float)reader.GetDouble(7), (float)reader.GetDouble(8));
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Streams all embedded fragment locations directly from the SQLite table,
+        /// without loading them all into memory at once.
+        /// </summary>
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>An async enumerable of (dbId, location) tuples.</returns>
+        public async IAsyncEnumerable<(int DbId, FragmentLocation Location)> GetEmbeddedFragmentLocationsStreamAsync(
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SelectAllLocationsSql;
+
+            using var reader = await cmd.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                int dbId = reader.GetInt32(0);
+                var location = new FragmentLocation(
+                    (float)reader.GetDouble(1), (float)reader.GetDouble(2), (float)reader.GetDouble(3),
+                    (float)reader.GetDouble(4), (float)reader.GetDouble(5), (float)reader.GetDouble(6),
+                    (float)reader.GetDouble(7), (float)reader.GetDouble(8), (float)reader.GetDouble(9));
+                yield return (dbId, location);
+            }
+        }
+
+        /// <summary>
+        /// Checks whether the SQLite database contains an embedded <c>_fragment_locations</c> table.
+        /// </summary>
+        public bool HasEmbeddedLocationTable()
+        {
+            try
+            {
+                using var cmd = _connection.CreateCommand();
+                cmd.CommandText = LocationTableExistsSql;
+                var result = cmd.ExecuteScalar();
+                return result != null && Convert.ToInt64(result) > 0;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Loads all fragment locations from the embedded SQLite table into memory.
+        /// Called automatically by the constructor if the table exists.
+        /// </summary>
+        private Dictionary<int, FragmentLocation> LoadEmbeddedLocations()
+        {
+            var locations = new Dictionary<int, FragmentLocation>();
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = SelectAllLocationsSql;
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                int dbId = reader.GetInt32(0);
+                var location = new FragmentLocation(
+                    (float)reader.GetDouble(1), (float)reader.GetDouble(2), (float)reader.GetDouble(3),
+                    (float)reader.GetDouble(4), (float)reader.GetDouble(5), (float)reader.GetDouble(6),
+                    (float)reader.GetDouble(7), (float)reader.GetDouble(8), (float)reader.GetDouble(9));
+                locations[dbId] = location;
+            }
+            return locations;
+        }
+
         private void ThrowIfNoLocations()
         {
             if (_fragmentLocations == null)
                 throw new InvalidOperationException(
-                    "Fragment locations not loaded. Use CreateWithLocationsAsync, LoadFragmentLocationsAsync, or SetFragmentLocations first.");
+                    "Fragment locations not loaded. Use CreateWithLocationsAsync, CreateWithEmbeddedLocationsAsync, LoadFragmentLocationsAsync, or SetFragmentLocations first.");
         }
 
         #endregion
