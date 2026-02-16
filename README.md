@@ -21,6 +21,8 @@ The PropDb is a SQLite database (`.sdb` file) embedded in every translated SVF m
 This library enables you to:
 
 - **Read properties** from a local `.sdb` file or download them directly from APS
+- **Extract element locations** (translation + bounding box) without downloading full geometry (~100x smaller)
+- **Embed locations** into the `.sdb` file for instant access (no re-download)
 - **Discover** all categories and property names in a model
 - **Query, filter, and stream** property values efficiently across large models
 - **Merge inherited properties** from parent elements
@@ -67,6 +69,65 @@ await foreach (var (dbId, value) in reader.GetAllPropertyValuesStreamAsync("Dime
 }
 ```
 
+### Element Locations (Fragment Data)
+
+**New in v1.1.0:** Access 3D location data (translation + bounding box) for each element **without downloading full fragment geometry**. All location data is stored on disk in the SQLite database — zero memory overhead.
+
+Traditional approach downloads 100+ MB of fragment data:
+```csharp
+// ❌ Old way: downloads all geometry, materials, transforms (~100+ MB)
+var fragments = await APSToolkit.Derivatives.ReadFragmentsRemoteAsync(token, urn);
+foreach (var frag in fragments)
+{
+    var pos = frag.Transform.Translation; // Only need these 3 values
+}
+```
+
+**PropDbReader** extracts only location data and embeds it directly into the `.sdb` database:
+```csharp
+// ✅ New way: downloads locations and embeds into .sdb (disk-based, no memory overhead)
+using var reader = await PropDbReader.CreateWithEmbeddedLocationsAsync(token, urn);
+
+// Query properties + locations together (reads from SQLite on disk)
+var result = await reader.GetPropertiesWithLocationAsync(dbId);
+Console.WriteLine($"Element at ({result.Location?.X}, {result.Location?.Y}, {result.Location?.Z})");
+```
+
+#### One-Time Download, Permanent Storage
+
+```csharp
+// First run: download and embed into .sdb file
+using var reader = await PropDbReader.CreateWithEmbeddedLocationsAsync(token, urn);
+
+// Subsequent opens — locations are already in the .sdb file, no re-download
+using var cachedReader = new PropDbReader("path-to-file.sdb");
+if (cachedReader.HasFragmentLocations)
+{
+    var loc = await cachedReader.GetEmbeddedFragmentLocationAsync(dbId);
+    Console.WriteLine($"Position: {loc?.X}, {loc?.Y}, {loc?.Z}");
+}
+```
+
+#### Combined Property + Location Queries
+
+```csharp
+// Find elements by property with locations (all from disk)
+var results = await reader.FindByPropertyWithLocationsAsync("__category__", "");
+foreach (var (dbId, propValue, location) in results)
+{
+    Console.WriteLine($"dbId {dbId}: value={propValue}, Z={location.Z}");
+}
+
+// Stream all elements with properties + locations (memory-efficient)
+await foreach (var (dbId, props, loc) in reader.GetAllPropertiesWithLocationsStreamAsync())
+{
+    Console.WriteLine($"dbId {dbId} at ({loc.X}, {loc.Y}, {loc.Z})");
+}
+
+// Batch query with locations
+var batch = await reader.GetPropertiesWithLocationsBatchAsync(new[] { 1, 2, 3 });
+```
+
 ### Cancellation Support
 
 ```csharp
@@ -95,6 +156,9 @@ var props = await reader.GetPropertiesForDbIdAsync(1, cts.Token);
 | [Microsoft.Data.Sqlite](https://www.nuget.org/packages/Microsoft.Data.Sqlite/) | 10.0.3 | SQLite database access |
 | [Autodesk.ModelDerivative](https://www.nuget.org/packages/Autodesk.ModelDerivative/) | 2.2.0 | APS Model Derivative API client |
 | [Autodesk.Authentication](https://www.nuget.org/packages/Autodesk.Authentication/) | 2.0.1 | APS Authentication SDK |
+| [RestSharp](https://www.nuget.org/packages/RestSharp/) | 112.1.0 | HTTP client for fragment downloads |
+| [SharpZipLib](https://www.nuget.org/packages/SharpZipLib/) | 1.4.2 | GZIP decompression for SVF resources |
+| [Newtonsoft.Json](https://www.nuget.org/packages/Newtonsoft.Json/) | 13.0.3 | JSON serialization |
 
 ---
 

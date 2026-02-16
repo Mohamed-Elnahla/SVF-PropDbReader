@@ -22,6 +22,22 @@ The main class for reading and querying the SVF property database.
 |---|---|---|
 | `CreateAsync(string accessToken, string urn, CancellationToken)` | `Task<PropDbReader>` | **Recommended.** Asynchronously downloads the DB from APS and returns a ready-to-use reader. Auto-deletes on dispose. |
 | `DownloadAndGetPathAsync(string accessToken, string urn, CancellationToken)` | `Task<string>` | Downloads the DB and returns the local file path without opening a reader. |
+| `CreateWithEmbeddedLocationsAsync(string accessToken, string urn, CancellationToken)` | `Task<PropDbReader>` | **New in v1.1.0.** Downloads DB and embeds locations into the `.sdb` file. All location queries go through SQLite on disk — zero memory overhead. |
+| `DownloadWithEmbeddedLocationsAsync(string accessToken, string urn, string savePath, CancellationToken)` | `Task<PropDbReader>` | **New in v1.1.0.** Downloads and saves to a specific path with embedded locations. File can be reopened without re-download. |
+
+### Static Helper Methods (Fragment Locations)
+
+| Method | Returns | Description |
+|---|---|---|
+| `EmbedLocationsIntoFileAsync(string dbPath, Dictionary<int, FragmentLocation> locations, CancellationToken)` | `Task` | Bulk-inserts locations into an existing `.sdb` file's `_fragment_locations` table. Uses a transaction for atomicity. |
+
+### Properties
+
+| Property | Type | Description |
+|---|---|---|
+| `DbPath` | `string` | File path to the opened `.sdb` database. |
+| `HasFragmentLocations` | `bool` | **New in v1.1.0.** `true` if the `_fragment_locations` table exists in the database (disk-based check). |
+| `FragmentLocationCount` | `int` | **New in v1.1.0.** Number of embedded locations (queries SQLite). Returns 0 if no locations table. |
 
 ### Instance Methods
 
@@ -78,6 +94,42 @@ flowchart TD
 | `FindDbIdsByPropertyAsync(string category, string displayName, object value, CancellationToken)` | `Task<List<long>>` | Finds all `dbId`s that have a specific property matching a given value. |
 | `QueryAsync(string sql, Dictionary<string, object?>? parameters, CancellationToken)` | `Task<List<Dictionary<string, object?>>>` | Executes a **custom SQL query** with optional parameters. Returns rows as dictionaries. |
 
+#### Fragment Location Queries (New in v1.1.0)
+
+**Requirements:** Locations must be embedded via `CreateWithEmbeddedLocationsAsync` or `EmbedFragmentLocationsAsync`. All queries read from SQLite on disk — zero memory overhead.
+
+##### Single Element
+
+| Method | Returns | Description |
+|---|---|---|
+| `GetPropertiesWithLocationAsync(long dbId, CancellationToken)` | `Task<(Dictionary<string, object?> Properties, FragmentLocation Location)>` | Gets properties and location for one element. Throws if no locations loaded. |
+| `GetMergedPropertiesWithLocationAsync(long dbId, CancellationToken)` | `Task<(Dictionary<string, object?> Properties, FragmentLocation Location)>` | Gets **inherited** properties plus location. |
+| `GetFragmentLocationAsync(int dbId, CancellationToken)` | `Task<FragmentLocation?>` | Queries a single location from the `_fragment_locations` table. Returns `null` if not found. |
+| `GetEmbeddedFragmentLocationAsync(long dbId, CancellationToken)` | `Task<FragmentLocation>` | Queries location from the `_fragment_locations` SQLite table. Throws if not found. |
+
+##### Batch Queries
+
+| Method | Returns | Description |
+|---|---|---|
+| `GetPropertiesWithLocationsBatchAsync(IEnumerable<long> dbIds, CancellationToken)` | `Task<List<(long DbId, Dictionary<string, object?> Properties, FragmentLocation Location)>>` | Gets properties + locations for multiple elements. |
+| `FindByPropertyWithLocationsAsync(string category, string displayName, object value, CancellationToken)` | `Task<List<(long DbId, Dictionary<string, object?> Properties, FragmentLocation Location)>>` | Finds elements by property value and returns properties + locations. |
+| `FindByPropertyWithFullDataAsync(string category, string displayName, object value, CancellationToken)` | `Task<List<(long DbId, Dictionary<string, object?> Properties, FragmentLocation Location)>>` | Same as above with merged (inherited) properties. |
+
+##### Streaming Queries
+
+| Method | Returns | Description |
+|---|---|---|
+| `GetAllPropertiesWithLocationsStreamAsync(CancellationToken)` | `IAsyncEnumerable<(long DbId, Dictionary<string, object?> Properties, FragmentLocation Location)>` | Streams all elements with properties and locations. Memory-efficient for large models. |
+| `FindByPropertyWithLocationsStreamAsync(string category, string displayName, object value, CancellationToken)` | `IAsyncEnumerable<(long DbId, Dictionary<string, object?> Properties, FragmentLocation Location)>` | Streams matching elements with properties and locations. |
+| `GetEmbeddedFragmentLocationsStreamAsync(CancellationToken)` | `IAsyncEnumerable<(long DbId, FragmentLocation Location)>` | Streams locations directly from SQLite database (no in-memory dictionary required). |
+
+##### Embedding Locations
+
+| Method | Returns | Description |
+|---|---|---|
+| `EmbedFragmentLocationsAsync(string accessToken, string urn, CancellationToken)` | `Task` | Downloads and embeds locations into the current `.sdb` file. Makes locations persistent for future opens. |
+| `HasEmbeddedLocationTable()` | `bool` | Checks if the `_fragment_locations` table exists in the database. |
+
 #### Schema Discovery
 
 | Method | Returns | Description |
@@ -99,16 +151,26 @@ flowchart TD
 |---|---|---|
 | `GetPropertyValueAsync` | **Minimal** | Single value lookup |
 | `GetPropertiesForDbIdAsync` | **Low** | One element at a time |
+| `GetFragmentLocationAsync` | **Low** | Single location query from DB |
+| `GetEmbeddedFragmentLocationAsync` | **Low** | Single location query from DB |
+| `GetPropertiesWithLocationAsync` | **Low** | One element + location |
 | `GetAllCategoriesAsync` | **Low** | Discover schema categories |
 | `GetAllPropertyNamesAsync` | **Low** | Discover property names |
 | `GetCategoriesWithPropertiesAsync` | **Low** | Full schema tree |
 | `GetAllPropertyValuesStreamAsync` | **Low** | Iterate all values, large models |
 | `GetAllPropertiesStreamAsync` | **Low** | Stream all properties, large models |
 | `GetAllPropertyValuesStreamToConcurrentAsync` | **Low** | Thread-safe + streaming |
+| `GetAllPropertiesWithLocationsStreamAsync` | **Low** | Stream properties + locations |
+| `GetEmbeddedFragmentLocationsStreamAsync` | **Low** | Stream locations from DB |
+| `FindByPropertyWithLocationsStreamAsync` | **Low** | Stream filtered results + locations |
 | `GetAllPropertyValuesListAsync` | **Medium** | Need LINQ or parallel processing |
+| `GetPropertiesWithLocationsBatchAsync` | **Medium** | Multiple elements + locations |
+| `FindByPropertyWithLocationsAsync` | **Medium** | Filtered results + locations |
 | `GetAllPropertyValuesAsync` | **Medium–High** | Dictionary access by dbId |
 | `GetAllPropertyValuesConcurrentAsync` | **Medium–High** | Thread-safe dictionary access |
 | `GetAllPropertiesAsync` | **Very High** | Full database dump |
+
+> **Tip:** Use streaming methods (`*StreamAsync`) for large models. Use `CreateWithEmbeddedLocationsAsync` to persist locations on disk — all location queries go through SQLite with zero memory overhead.
 
 ---
 
@@ -174,3 +236,55 @@ Keys returned by `GetPropertiesForDbIdAsync` and `GetMergedPropertiesAsync` foll
 | `long` | Integer values, dbId references | `42` |
 | `double` | Floating point measurements | `3.14159` |
 | `null` | Property exists but has no value | `null` |
+---
+
+## FragmentLocation Struct
+
+**Namespace:** `SVF.PropDbReader`  
+**New in v1.1.0**
+
+A lightweight readonly struct representing an element's 3D location (translation + bounding box).
+
+### Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `X` | `float` | Translation X coordinate |
+| `Y` | `float` | Translation Y coordinate |
+| `Z` | `float` | Translation Z coordinate |
+| `MinX` | `float` | Bounding box minimum X |
+| `MinY` | `float` | Bounding box minimum Y |
+| `MinZ` | `float` | Bounding box minimum Z |
+| `MaxX` | `float` | Bounding box maximum X |
+| `MaxY` | `float` | Bounding box maximum Y |
+| `MaxZ` | `float` | Bounding box maximum Z |
+
+### Memory Size
+
+36 bytes (9 × 4-byte floats)
+
+### Example Usage
+
+```csharp
+var location = await reader.GetEmbeddedFragmentLocationAsync(dbId);
+
+Console.WriteLine($"Position: ({location.X}, {location.Y}, {location.Z})");
+Console.WriteLine($"Size: {location.MaxX - location.MinX} × {location.MaxY - location.MinY} × {location.MaxZ - location.MinZ}");
+
+// Check if element is elevated
+if (location.MinZ > 0)
+{
+    Console.WriteLine($"Element is {location.MinZ} units above ground");
+}
+```
+
+### Equality & Comparison
+
+Implements `IEquatable<FragmentLocation>` with value-based equality:
+
+```csharp
+var loc1 = new FragmentLocation(0, 0, 0, -1, -1, -1, 1, 1, 1);
+var loc2 = new FragmentLocation(0, 0, 0, -1, -1, -1, 1, 1, 1);
+
+bool same = loc1 == loc2;  // true
+```
