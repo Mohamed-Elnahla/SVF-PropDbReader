@@ -22,26 +22,22 @@ The main class for reading and querying the SVF property database.
 |---|---|---|
 | `CreateAsync(string accessToken, string urn, CancellationToken)` | `Task<PropDbReader>` | **Recommended.** Asynchronously downloads the DB from APS and returns a ready-to-use reader. Auto-deletes on dispose. |
 | `DownloadAndGetPathAsync(string accessToken, string urn, CancellationToken)` | `Task<string>` | Downloads the DB and returns the local file path without opening a reader. |
-| `CreateWithLocationsAsync(string accessToken, string urn, CancellationToken)` | `Task<PropDbReader>` | **New in v1.1.0.** Downloads DB and fragment locations into memory. Locations are **not persisted** (downloaded each time). |
-| `CreateWithEmbeddedLocationsAsync(string accessToken, string urn, CancellationToken)` | `Task<PropDbReader>` | **New in v1.1.0.** Downloads DB and embeds locations into the `.sdb` file. Subsequent opens auto-load locations from database. |
-| `DownloadWithEmbeddedLocationsAsync(string accessToken, string urn, string savePath, CancellationToken)` | `Task<PropDbReader>` | **New in v1.1.0.** Downloads and saves to specific path with embedded locations. File can be opened without re-download. |
+| `CreateWithEmbeddedLocationsAsync(string accessToken, string urn, CancellationToken)` | `Task<PropDbReader>` | **New in v1.1.0.** Downloads DB and embeds locations into the `.sdb` file. All location queries go through SQLite on disk — zero memory overhead. |
+| `DownloadWithEmbeddedLocationsAsync(string accessToken, string urn, string savePath, CancellationToken)` | `Task<PropDbReader>` | **New in v1.1.0.** Downloads and saves to a specific path with embedded locations. File can be reopened without re-download. |
 
 ### Static Helper Methods (Fragment Locations)
 
 | Method | Returns | Description |
 |---|---|---|
-| `DownloadFragmentLocationsAsync(string accessToken, string urn, CancellationToken)` | `Task<Dictionary<int, FragmentLocation>>` | Downloads only location data for all elements. Much smaller than full fragments (~1-5 MB vs 100+ MB). |
-| `DownloadFragmentLocationsFilteredAsync(string accessToken, string urn, HashSet<int> dbIds, CancellationToken)` | `Task<Dictionary<int, FragmentLocation>>` | Downloads locations for specific dbIds only. Useful when you've already filtered by properties. |
-| `EmbedLocationsIntoFileAsync(string dbPath, Dictionary<int, FragmentLocation> locations, CancellationToken)` | `Task` | Bulk-inserts locations into an existing `.sdb` file's `_fragment_locations` table. Uses transaction for atomicity. |
+| `EmbedLocationsIntoFileAsync(string dbPath, Dictionary<int, FragmentLocation> locations, CancellationToken)` | `Task` | Bulk-inserts locations into an existing `.sdb` file's `_fragment_locations` table. Uses a transaction for atomicity. |
 
 ### Properties
 
 | Property | Type | Description |
 |---|---|---|
 | `DbPath` | `string` | File path to the opened `.sdb` database. |
-| `HasFragmentLocations` | `bool` | **New in v1.1.0.** `true` if locations are loaded (memory or embedded). |
-| `FragmentLocationCount` | `int` | **New in v1.1.0.** Number of loaded locations. Returns 0 if no locations. |
-| `FragmentLocations` | `IReadOnlyDictionary<int, FragmentLocation>?` | **New in v1.1.0.** Read-only access to all locations. `null` if no locations loaded. |
+| `HasFragmentLocations` | `bool` | **New in v1.1.0.** `true` if the `_fragment_locations` table exists in the database (disk-based check). |
+| `FragmentLocationCount` | `int` | **New in v1.1.0.** Number of embedded locations (queries SQLite). Returns 0 if no locations table. |
 
 ### Instance Methods
 
@@ -100,7 +96,7 @@ flowchart TD
 
 #### Fragment Location Queries (New in v1.1.0)
 
-**Requirements:** Locations must be loaded via `CreateWithLocationsAsync`, `CreateWithEmbeddedLocationsAsync`, or `EmbedFragmentLocationsAsync`.
+**Requirements:** Locations must be embedded via `CreateWithEmbeddedLocationsAsync` or `EmbedFragmentLocationsAsync`. All queries read from SQLite on disk — zero memory overhead.
 
 ##### Single Element
 
@@ -108,7 +104,8 @@ flowchart TD
 |---|---|---|
 | `GetPropertiesWithLocationAsync(long dbId, CancellationToken)` | `Task<(Dictionary<string, object?> Properties, FragmentLocation Location)>` | Gets properties and location for one element. Throws if no locations loaded. |
 | `GetMergedPropertiesWithLocationAsync(long dbId, CancellationToken)` | `Task<(Dictionary<string, object?> Properties, FragmentLocation Location)>` | Gets **inherited** properties plus location. |
-| `GetEmbeddedFragmentLocationAsync(long dbId, CancellationToken)` | `Task<FragmentLocation>` | Queries location directly from `_fragment_locations` SQLite table (one-off query). Works even without loading all locations. |
+| `GetFragmentLocationAsync(int dbId, CancellationToken)` | `Task<FragmentLocation?>` | Queries a single location from the `_fragment_locations` table. Returns `null` if not found. |
+| `GetEmbeddedFragmentLocationAsync(long dbId, CancellationToken)` | `Task<FragmentLocation>` | Queries location from the `_fragment_locations` SQLite table. Throws if not found. |
 
 ##### Batch Queries
 
@@ -154,6 +151,7 @@ flowchart TD
 |---|---|---|
 | `GetPropertyValueAsync` | **Minimal** | Single value lookup |
 | `GetPropertiesForDbIdAsync` | **Low** | One element at a time |
+| `GetFragmentLocationAsync` | **Low** | Single location query from DB |
 | `GetEmbeddedFragmentLocationAsync` | **Low** | Single location query from DB |
 | `GetPropertiesWithLocationAsync` | **Low** | One element + location |
 | `GetAllCategoriesAsync` | **Low** | Discover schema categories |
@@ -166,15 +164,13 @@ flowchart TD
 | `GetEmbeddedFragmentLocationsStreamAsync` | **Low** | Stream locations from DB |
 | `FindByPropertyWithLocationsStreamAsync` | **Low** | Stream filtered results + locations |
 | `GetAllPropertyValuesListAsync` | **Medium** | Need LINQ or parallel processing |
-| `DownloadFragmentLocationsAsync` | **Medium** | All locations (36 bytes × element count) |
 | `GetPropertiesWithLocationsBatchAsync` | **Medium** | Multiple elements + locations |
 | `FindByPropertyWithLocationsAsync` | **Medium** | Filtered results + locations |
 | `GetAllPropertyValuesAsync` | **Medium–High** | Dictionary access by dbId |
 | `GetAllPropertyValuesConcurrentAsync` | **Medium–High** | Thread-safe dictionary access |
-| `CreateWithLocationsAsync` | **Medium–High** | Loads both DB + all locations in memory |
 | `GetAllPropertiesAsync` | **Very High** | Full database dump |
 
-> **Tip:** Use streaming methods (`*StreamAsync`) for large models. Use embedded locations (`CreateWithEmbeddedLocationsAsync`) to avoid re-downloading fragment data.
+> **Tip:** Use streaming methods (`*StreamAsync`) for large models. Use `CreateWithEmbeddedLocationsAsync` to persist locations on disk — all location queries go through SQLite with zero memory overhead.
 
 ---
 

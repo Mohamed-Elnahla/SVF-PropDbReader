@@ -18,8 +18,12 @@ namespace SVF.PropDbReader
         private readonly SqliteConnection _connection;
         private readonly string _dbPath;
         private readonly bool _deleteDbOnDispose;
-        private Dictionary<int, FragmentLocation>? _fragmentLocations;
         private bool _disposed;
+
+        /// <summary>
+        /// Gets the file path to the underlying .sdb database.
+        /// </summary>
+        public string DbPath => _dbPath;
 
         #region SQL Constants
 
@@ -131,6 +135,9 @@ namespace SVF.PropDbReader
         private const string LocationTableExistsSql =
             "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_fragment_locations'";
 
+        private const string CountLocationsSql =
+            "SELECT COUNT(*) FROM _fragment_locations";
+
         #endregion
 
         /// <summary>
@@ -153,37 +160,10 @@ namespace SVF.PropDbReader
         }
 
         /// <summary>
-        /// Async factory that creates a <see cref="PropDbReader"/> and simultaneously downloads
-        /// the lightweight fragment location data. This enables combined property + location queries
-        /// without a separate fragment download step. Locations are held in memory only.
-        /// </summary>
-        /// <param name="accessToken">Autodesk access token.</param>
-        /// <param name="urn">The URN of the model.</param>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>A configured <see cref="PropDbReader"/> instance with fragment locations pre-loaded.</returns>
-        /// <exception cref="InvalidOperationException">Thrown when the properties database cannot be downloaded.</exception>
-        public static async Task<PropDbReader> CreateWithLocationsAsync(string accessToken, string urn, CancellationToken cancellationToken = default)
-        {
-            ArgumentNullException.ThrowIfNull(accessToken);
-            ArgumentNullException.ThrowIfNull(urn);
-
-            // Download SDB and fragment locations in parallel for maximum throughput
-            var dbPathTask = DownloadAndGetPathAsync(accessToken, urn, cancellationToken);
-            var locationsTask = Derivatives.ReadFragmentLocationsRemoteAsync(urn, accessToken);
-
-            await Task.WhenAll(dbPathTask, locationsTask).ConfigureAwait(false);
-
-            var dbPath = await dbPathTask ?? throw new InvalidOperationException("Failed to download properties database.");
-            var reader = new PropDbReader(dbPath, deleteDbOnDispose: true);
-            reader._fragmentLocations = await locationsTask;
-            return reader;
-        }
-
-        /// <summary>
         /// Async factory that creates a <see cref="PropDbReader"/>, downloads fragment locations,
         /// and <b>embeds them into the SQLite database file</b> as a <c>_fragment_locations</c> table.
-        /// On subsequent opens of the same cached SDB file, locations are loaded automatically from
-        /// the database — no additional network download is needed.
+        /// All location queries are served directly from the database — no data is kept in memory.
+        /// On subsequent opens of the same cached SDB file, locations are available immediately.
         /// </summary>
         /// <param name="accessToken">Autodesk access token.</param>
         /// <param name="urn">The URN of the model.</param>
@@ -274,12 +254,6 @@ namespace SVF.PropDbReader
             _deleteDbOnDispose = deleteDbOnDispose;
             _connection = new SqliteConnection($"Data Source={_dbPath};Mode=ReadOnly;Pooling=False");
             _connection.Open();
-
-            // Auto-detect and load embedded fragment locations if available
-            if (HasEmbeddedLocationTable())
-            {
-                _fragmentLocations = LoadEmbeddedLocations();
-            }
         }
 
         /// <summary>
@@ -740,23 +714,35 @@ namespace SVF.PropDbReader
         #region Fragment Locations
 
         /// <summary>
-        /// Gets whether fragment locations have been loaded for this reader.
+        /// Gets whether the database has an embedded <c>_fragment_locations</c> table with data.
         /// </summary>
-        public bool HasFragmentLocations => _fragmentLocations != null && _fragmentLocations.Count > 0;
+        public bool HasFragmentLocations => HasEmbeddedLocationTable();
 
         /// <summary>
-        /// Gets the number of loaded fragment locations, or 0 if not loaded.
+        /// Gets the number of embedded fragment locations by querying the database,
+        /// or 0 if the table does not exist.
         /// </summary>
-        public int FragmentLocationCount => _fragmentLocations?.Count ?? 0;
-
-        /// <summary>
-        /// Gets the currently loaded fragment locations as a read-only dictionary, or null if not loaded.
-        /// </summary>
-        public IReadOnlyDictionary<int, FragmentLocation>? FragmentLocations => _fragmentLocations;
+        public int FragmentLocationCount
+        {
+            get
+            {
+                try
+                {
+                    if (!HasEmbeddedLocationTable()) return 0;
+                    using var cmd = _connection.CreateCommand();
+                    cmd.CommandText = CountLocationsSql;
+                    var result = cmd.ExecuteScalar();
+                    return result != null ? Convert.ToInt32(result) : 0;
+                }
+                catch { return 0; }
+            }
+        }
 
         /// <summary>
         /// Downloads only the lightweight fragment location data (position + bounding box per dbID)
         /// for the specified model. This is much smaller than downloading full SVF derivatives.
+        /// The returned dictionary is transient — use <see cref="EmbedLocationsIntoFileAsync"/>
+        /// to persist it into a database file for disk-based queries.
         /// </summary>
         /// <param name="accessToken">Autodesk access token.</param>
         /// <param name="urn">The URN of the model.</param>
@@ -789,127 +775,109 @@ namespace SVF.PropDbReader
         }
 
         /// <summary>
-        /// Sets the fragment locations for this reader instance.
-        /// Call this if you downloaded locations separately via <see cref="DownloadFragmentLocationsAsync"/>.
-        /// </summary>
-        /// <param name="locations">The fragment locations dictionary.</param>
-        public void SetFragmentLocations(Dictionary<int, FragmentLocation> locations)
-        {
-            ArgumentNullException.ThrowIfNull(locations);
-            _fragmentLocations = locations;
-        }
-
-        /// <summary>
-        /// Downloads and loads fragment locations into this reader instance.
-        /// After calling this method, all location-aware query methods become available.
+        /// Downloads fragment locations and embeds them into this reader's database file.
+        /// After calling this method, all location-aware query methods become available
+        /// and serve data directly from the SQLite database (no in-memory storage).
         /// </summary>
         /// <param name="accessToken">Autodesk access token.</param>
         /// <param name="urn">The URN of the model.</param>
-        public async Task LoadFragmentLocationsAsync(string accessToken, string urn)
+        /// <param name="cancellationToken">Cancellation token.</param>
+        public async Task EmbedFragmentLocationsAsync(string accessToken, string urn, CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(accessToken);
             ArgumentNullException.ThrowIfNull(urn);
             ThrowIfDisposed();
 
-            _fragmentLocations = await Derivatives.ReadFragmentLocationsRemoteAsync(urn, accessToken).ConfigureAwait(false);
+            var locations = await Derivatives.ReadFragmentLocationsRemoteAsync(urn, accessToken).ConfigureAwait(false);
+            await EmbedLocationsIntoFileAsync(_dbPath, locations, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
-        /// Gets the fragment location for a specific dbId, or null if not found.
-        /// Requires fragment locations to be loaded.
+        /// Gets the fragment location for a specific dbId directly from the embedded SQLite table.
+        /// No data is held in memory — each call reads from disk.
         /// </summary>
         /// <param name="dbId">The database ID of the element.</param>
-        /// <returns>The fragment location, or null if not found.</returns>
-        /// <exception cref="InvalidOperationException">Thrown if fragment locations are not loaded.</exception>
-        public FragmentLocation? GetFragmentLocation(int dbId)
+        /// <param name="cancellationToken">Cancellation token.</param>
+        /// <returns>The fragment location, or null if not found or no embedded table exists.</returns>
+        public async Task<FragmentLocation?> GetFragmentLocationAsync(int dbId, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
-            ThrowIfNoLocations();
-
-            return _fragmentLocations!.TryGetValue(dbId, out var location) ? location : null;
-        }
-
-        /// <summary>
-        /// Gets all dbIds that have fragment locations (i.e., exist in the SVF fragment data).
-        /// Requires fragment locations to be loaded.
-        /// </summary>
-        /// <returns>An enumerable of dbIds with locations.</returns>
-        /// <exception cref="InvalidOperationException">Thrown if fragment locations are not loaded.</exception>
-        public IEnumerable<int> GetDbIdsWithLocations()
-        {
-            ThrowIfDisposed();
-            ThrowIfNoLocations();
-
-            return _fragmentLocations!.Keys;
+            return await GetEmbeddedFragmentLocationAsync(dbId, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
         /// Gets merged properties combined with location data for a specific dbId.
-        /// Requires fragment locations to be loaded.
+        /// Location is queried directly from the embedded SQLite table (disk-based).
+        /// Requires the <c>_fragment_locations</c> table to exist in the database.
         /// </summary>
         /// <param name="dbId">The database ID of the element.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>A tuple of (merged properties, fragment location or null if not found in fragments).</returns>
+        /// <returns>A tuple of (merged properties, fragment location or null if not found).</returns>
         public async Task<(Dictionary<string, object?> Properties, FragmentLocation? Location)> GetMergedPropertiesWithLocationAsync(
             long dbId, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
+            ThrowIfNoLocations();
 
             var props = await GetMergedPropertiesAsync(dbId, cancellationToken).ConfigureAwait(false);
-            FragmentLocation? location = _fragmentLocations?.TryGetValue((int)dbId, out var loc) == true ? loc : null;
+            var location = await GetEmbeddedFragmentLocationAsync((int)dbId, cancellationToken).ConfigureAwait(false);
 
             return (props, location);
         }
 
         /// <summary>
         /// Gets direct properties (without parent merging) combined with location data for a specific dbId.
-        /// Requires fragment locations to be loaded.
+        /// Location is queried directly from the embedded SQLite table (disk-based).
+        /// Requires the <c>_fragment_locations</c> table to exist in the database.
         /// </summary>
         /// <param name="dbId">The database ID of the element.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
-        /// <returns>A tuple of (direct properties, fragment location or null if not found in fragments).</returns>
+        /// <returns>A tuple of (direct properties, fragment location or null if not found).</returns>
         public async Task<(Dictionary<string, object?> Properties, FragmentLocation? Location)> GetPropertiesWithLocationAsync(
             long dbId, CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
+            ThrowIfNoLocations();
 
             var props = await GetPropertiesForDbIdAsync(dbId, cancellationToken).ConfigureAwait(false);
-            FragmentLocation? location = _fragmentLocations?.TryGetValue((int)dbId, out var loc) == true ? loc : null;
+            var location = await GetEmbeddedFragmentLocationAsync((int)dbId, cancellationToken).ConfigureAwait(false);
 
             return (props, location);
         }
 
         /// <summary>
-        /// Streams all dbIds that have fragment locations, along with their merged properties.
-        /// Only yields elements that exist in both the property database and fragment data.
-        /// Requires fragment locations to be loaded.
+        /// Streams all dbIds that have embedded fragment locations, along with their merged properties.
+        /// Only yields elements that exist in both the property database and fragment location table.
+        /// All data is read from disk — nothing is held in memory.
+        /// Requires the <c>_fragment_locations</c> table to exist in the database.
         /// </summary>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>An async enumerable of (dbId, properties, location) tuples.</returns>
-        /// <exception cref="InvalidOperationException">Thrown if fragment locations are not loaded.</exception>
+        /// <exception cref="InvalidOperationException">Thrown if the location table does not exist.</exception>
         public async IAsyncEnumerable<(long DbId, Dictionary<string, object?> Properties, FragmentLocation Location)> GetAllPropertiesWithLocationsStreamAsync(
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             ThrowIfDisposed();
             ThrowIfNoLocations();
 
-            foreach (var kvp in _fragmentLocations!)
+            await foreach (var (dbId, location) in GetEmbeddedFragmentLocationsStreamAsync(cancellationToken))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var props = await GetMergedPropertiesAsync(kvp.Key, cancellationToken).ConfigureAwait(false);
-                yield return (kvp.Key, props, kvp.Value);
+                var props = await GetMergedPropertiesAsync(dbId, cancellationToken).ConfigureAwait(false);
+                yield return (dbId, props, location);
             }
         }
 
         /// <summary>
         /// Gets properties with locations for a batch of dbIds.
-        /// Useful for processing elements in chunks. Only returns entries that have fragment locations.
-        /// Requires fragment locations to be loaded.
+        /// Locations are queried from the embedded SQLite table (disk-based).
+        /// Only returns entries that have fragment locations.
+        /// Requires the <c>_fragment_locations</c> table to exist in the database.
         /// </summary>
         /// <param name="dbIds">The dbIds to retrieve.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>A list of (dbId, properties, location) tuples for dbIds that have locations.</returns>
-        /// <exception cref="InvalidOperationException">Thrown if fragment locations are not loaded.</exception>
+        /// <exception cref="InvalidOperationException">Thrown if the location table does not exist.</exception>
         public async Task<List<(long DbId, Dictionary<string, object?> Properties, FragmentLocation Location)>> GetPropertiesWithLocationsBatchAsync(
             IEnumerable<int> dbIds, CancellationToken cancellationToken = default)
         {
@@ -921,10 +889,11 @@ namespace SVF.PropDbReader
             foreach (var dbId in dbIds)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (_fragmentLocations!.TryGetValue(dbId, out var location))
+                var location = await GetEmbeddedFragmentLocationAsync(dbId, cancellationToken).ConfigureAwait(false);
+                if (location.HasValue)
                 {
                     var props = await GetMergedPropertiesAsync(dbId, cancellationToken).ConfigureAwait(false);
-                    results.Add((dbId, props, location));
+                    results.Add((dbId, props, location.Value));
                 }
             }
             return results;
@@ -932,14 +901,14 @@ namespace SVF.PropDbReader
 
         /// <summary>
         /// Finds all dbIds matching a property filter and returns their locations alongside the property value.
-        /// Queries the SDB first, then looks up locations for matching dbIds.
-        /// Requires fragment locations to be loaded.
+        /// Queries the SDB property tables first, then looks up locations from the embedded SQLite table.
+        /// Requires the <c>_fragment_locations</c> table to exist in the database.
         /// </summary>
         /// <param name="category">The category name of the property.</param>
         /// <param name="displayName">The display name (property name).</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>A list of (dbId, propertyValue, location) tuples for matches that have locations.</returns>
-        /// <exception cref="InvalidOperationException">Thrown if fragment locations are not loaded.</exception>
+        /// <exception cref="InvalidOperationException">Thrown if the location table does not exist.</exception>
         public async Task<List<(long DbId, object? PropertyValue, FragmentLocation Location)>> FindByPropertyWithLocationsAsync(
             string category, string displayName, CancellationToken cancellationToken = default)
         {
@@ -953,9 +922,10 @@ namespace SVF.PropDbReader
 
             foreach (var kvp in propertyValues)
             {
-                if (_fragmentLocations!.TryGetValue((int)kvp.Key, out var location))
+                var location = await GetEmbeddedFragmentLocationAsync((int)kvp.Key, cancellationToken).ConfigureAwait(false);
+                if (location.HasValue)
                 {
-                    results.Add((kvp.Key, kvp.Value, location));
+                    results.Add((kvp.Key, kvp.Value, location.Value));
                 }
             }
 
@@ -963,15 +933,14 @@ namespace SVF.PropDbReader
         }
 
         /// <summary>
-        /// Streams dbIds matching a property filter along with their locations.
-        /// Queries the SDB first, then looks up locations for matching dbIds.
-        /// Requires fragment locations to be loaded.
+        /// Streams dbIds matching a property filter along with their locations from the embedded SQLite table.
+        /// Requires the <c>_fragment_locations</c> table to exist in the database.
         /// </summary>
         /// <param name="category">The category name of the property.</param>
         /// <param name="displayName">The display name (property name).</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>An async enumerable of (dbId, propertyValue, location) tuples.</returns>
-        /// <exception cref="InvalidOperationException">Thrown if fragment locations are not loaded.</exception>
+        /// <exception cref="InvalidOperationException">Thrown if the location table does not exist.</exception>
         public async IAsyncEnumerable<(long DbId, object? PropertyValue, FragmentLocation Location)> FindByPropertyWithLocationsStreamAsync(
             string category, string displayName,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -983,25 +952,26 @@ namespace SVF.PropDbReader
 
             await foreach (var (dbId, value) in GetAllPropertyValuesStreamAsync(category, displayName, cancellationToken))
             {
-                if (_fragmentLocations!.TryGetValue((int)dbId, out var location))
+                var location = await GetEmbeddedFragmentLocationAsync((int)dbId, cancellationToken).ConfigureAwait(false);
+                if (location.HasValue)
                 {
-                    yield return (dbId, value, location);
+                    yield return (dbId, value, location.Value);
                 }
             }
         }
 
         /// <summary>
         /// Finds dbIds matching a specific property value and returns their merged properties with locations.
-        /// This is the most comprehensive combined query - it filters by property, merges parent properties,
-        /// and includes location data, all in one call.
-        /// Requires fragment locations to be loaded.
+        /// This is the most comprehensive combined query — it filters by property, merges parent properties,
+        /// and includes location data from the embedded SQLite table, all in one call.
+        /// Requires the <c>_fragment_locations</c> table to exist in the database.
         /// </summary>
         /// <param name="category">The category name of the property to filter by.</param>
         /// <param name="displayName">The display name (property name) to filter by.</param>
         /// <param name="value">The value to match.</param>
         /// <param name="cancellationToken">Cancellation token.</param>
         /// <returns>A list of (dbId, mergedProperties, location) tuples for matching elements with locations.</returns>
-        /// <exception cref="InvalidOperationException">Thrown if fragment locations are not loaded.</exception>
+        /// <exception cref="InvalidOperationException">Thrown if the location table does not exist.</exception>
         public async Task<List<(long DbId, Dictionary<string, object?> Properties, FragmentLocation Location)>> FindByPropertyWithFullDataAsync(
             string category, string displayName, object value, CancellationToken cancellationToken = default)
         {
@@ -1017,31 +987,15 @@ namespace SVF.PropDbReader
             foreach (var dbId in dbIds)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (_fragmentLocations!.TryGetValue((int)dbId, out var location))
+                var location = await GetEmbeddedFragmentLocationAsync((int)dbId, cancellationToken).ConfigureAwait(false);
+                if (location.HasValue)
                 {
                     var props = await GetMergedPropertiesAsync(dbId, cancellationToken).ConfigureAwait(false);
-                    results.Add((dbId, props, location));
+                    results.Add((dbId, props, location.Value));
                 }
             }
 
             return results;
-        }
-
-        /// <summary>
-        /// Writes the currently loaded fragment locations into the SQLite database file
-        /// as a <c>_fragment_locations</c> table. After this, any future open of the same file
-        /// will automatically load the locations — no additional network download is needed.
-        /// Requires fragment locations to be loaded (via <see cref="LoadFragmentLocationsAsync"/>,
-        /// <see cref="SetFragmentLocations"/>, or a factory that downloads them).
-        /// </summary>
-        /// <param name="cancellationToken">Cancellation token.</param>
-        /// <exception cref="InvalidOperationException">Thrown if fragment locations are not loaded.</exception>
-        public async Task EmbedFragmentLocationsAsync(CancellationToken cancellationToken = default)
-        {
-            ThrowIfDisposed();
-            ThrowIfNoLocations();
-
-            await EmbedLocationsIntoFileAsync(_dbPath, _fragmentLocations!, cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>
@@ -1190,34 +1144,11 @@ namespace SVF.PropDbReader
             }
         }
 
-        /// <summary>
-        /// Loads all fragment locations from the embedded SQLite table into memory.
-        /// Called automatically by the constructor if the table exists.
-        /// </summary>
-        private Dictionary<int, FragmentLocation> LoadEmbeddedLocations()
-        {
-            var locations = new Dictionary<int, FragmentLocation>();
-            using var cmd = _connection.CreateCommand();
-            cmd.CommandText = SelectAllLocationsSql;
-
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                int dbId = reader.GetInt32(0);
-                var location = new FragmentLocation(
-                    (float)reader.GetDouble(1), (float)reader.GetDouble(2), (float)reader.GetDouble(3),
-                    (float)reader.GetDouble(4), (float)reader.GetDouble(5), (float)reader.GetDouble(6),
-                    (float)reader.GetDouble(7), (float)reader.GetDouble(8), (float)reader.GetDouble(9));
-                locations[dbId] = location;
-            }
-            return locations;
-        }
-
         private void ThrowIfNoLocations()
         {
-            if (_fragmentLocations == null)
+            if (!HasEmbeddedLocationTable())
                 throw new InvalidOperationException(
-                    "Fragment locations not loaded. Use CreateWithLocationsAsync, CreateWithEmbeddedLocationsAsync, LoadFragmentLocationsAsync, or SetFragmentLocations first.");
+                    "Fragment locations not available. Use CreateWithEmbeddedLocationsAsync or EmbedFragmentLocationsAsync to embed locations into the database first.");
         }
 
         #endregion

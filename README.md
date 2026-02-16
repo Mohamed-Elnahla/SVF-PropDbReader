@@ -71,7 +71,7 @@ await foreach (var (dbId, value) in reader.GetAllPropertyValuesStreamAsync("Dime
 
 ### Element Locations (Fragment Data)
 
-**New in v1.1.0:** Access 3D location data (translation + bounding box) for each element **without downloading full fragment geometry**.
+**New in v1.1.0:** Access 3D location data (translation + bounding box) for each element **without downloading full fragment geometry**. All location data is stored on disk in the SQLite database — zero memory overhead.
 
 Traditional approach downloads 100+ MB of fragment data:
 ```csharp
@@ -83,58 +83,49 @@ foreach (var frag in fragments)
 }
 ```
 
-**PropDbReader** extracts only location data (9 floats per element):
+**PropDbReader** extracts only location data and embeds it directly into the `.sdb` database:
 ```csharp
-// ✅ New way: downloads only locations (~1-5 MB for typical models)
-using var reader = await PropDbReader.CreateWithLocationsAsync(token, urn);
-
-// Query properties + locations together
-var result = await reader.GetPropertiesWithLocationAsync(dbId);
-Console.WriteLine($"Element at ({result.Location.X}, {result.Location.Y}, {result.Location.Z})");
-Console.WriteLine($"BBox: ({result.Location.MinX}, {result.Location.MinY}, {result.Location.MinZ})");
-```
-
-#### Memory-Only Locations (Download Each Time)
-
-```csharp
-// Download locations into memory (not persisted)
-using var reader = await PropDbReader.CreateWithLocationsAsync(token, urn);
-
-// All methods now support locations
-var allWithLocations = await reader.GetAllPropertiesWithLocationsStreamAsync();
-await foreach (var (dbId, props, location) in allWithLocations)
-{
-    Console.WriteLine($"dbId {dbId} at ({location.X}, {location.Y}, {location.Z})");
-}
-```
-
-#### Embedded Locations (One-Time Download, Permanent Storage)
-
-```csharp
-// Download once and embed into .sdb file
+// ✅ New way: downloads locations and embeds into .sdb (disk-based, no memory overhead)
 using var reader = await PropDbReader.CreateWithEmbeddedLocationsAsync(token, urn);
 
-// Subsequent opens auto-load locations from the .sdb file
+// Query properties + locations together (reads from SQLite on disk)
+var result = await reader.GetPropertiesWithLocationAsync(dbId);
+Console.WriteLine($"Element at ({result.Location?.X}, {result.Location?.Y}, {result.Location?.Z})");
+```
+
+#### One-Time Download, Permanent Storage
+
+```csharp
+// First run: download and embed into .sdb file
+using var reader = await PropDbReader.CreateWithEmbeddedLocationsAsync(token, urn);
+
+// Subsequent opens — locations are already in the .sdb file, no re-download
 using var cachedReader = new PropDbReader("path-to-file.sdb");
 if (cachedReader.HasFragmentLocations)
 {
     var loc = await cachedReader.GetEmbeddedFragmentLocationAsync(dbId);
-    Console.WriteLine($"Position: {loc.X}, {loc.Y}, {loc.Z}");
+    Console.WriteLine($"Position: {loc?.X}, {loc?.Y}, {loc?.Z}");
 }
 ```
 
 #### Combined Property + Location Queries
 
 ```csharp
-// Find all walls with their locations
-var walls = await reader.FindByPropertyWithLocationsAsync("__category__", "", "Walls");
-foreach (var (dbId, props, location) in walls)
+// Find elements by property with locations (all from disk)
+var results = await reader.FindByPropertyWithLocationsAsync("__category__", "");
+foreach (var (dbId, propValue, location) in results)
 {
-    Console.WriteLine($"Wall {dbId} at height {location.Z}");
+    Console.WriteLine($"dbId {dbId}: value={propValue}, Z={location.Z}");
+}
+
+// Stream all elements with properties + locations (memory-efficient)
+await foreach (var (dbId, props, loc) in reader.GetAllPropertiesWithLocationsStreamAsync())
+{
+    Console.WriteLine($"dbId {dbId} at ({loc.X}, {loc.Y}, {loc.Z})");
 }
 
 // Batch query with locations
-var batch = await reader.GetPropertiesWithLocationsBatchAsync(new[] { 1L, 2L, 3L });
+var batch = await reader.GetPropertiesWithLocationsBatchAsync(new[] { 1, 2, 3 });
 ```
 
 ### Cancellation Support
